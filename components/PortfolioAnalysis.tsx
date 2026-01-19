@@ -1,7 +1,7 @@
 
 import React, { useMemo } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, ReferenceLine
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, ReferenceLine, ComposedChart
 } from 'recharts';
 import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
@@ -162,17 +162,17 @@ const PortfolioAnalysis: React.FC = () => {
 
                 <div className="bg-gray-800 rounded-lg p-4">
                     <h2 className="text-2xl font-bold text-white mb-4">Equity Line & Drawdown</h2>
-                    <ResponsiveContainer width="100%" height={350}>
-                        <LineChart data={equityChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                    <ResponsiveContainer width="100%" height={700}>
+                        <ComposedChart data={equityChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#444444" />
                             <XAxis dataKey="name" stroke="#a0a0a0" fontSize={12} />
                             <YAxis stroke="#a0a0a0" fontSize={12} tickFormatter={currencyFormatter} width={50} />
                             <Tooltip content={<CustomEquityTooltip />} />
                             <Legend wrapperStyle={{paddingTop: '20px'}}/>
                             <ReferenceLine y={initialCapital} label={{ value: 'Cap. Iniziale', position: 'insideTopLeft', fill: '#a0a0a0', fontSize: 10 }} stroke="#a0a0a0" strokeDasharray="2 2" />
+                            <Bar dataKey="drawdown" name="Drawdown" fill="#ef4444" opacity={0.6} barSize={20} />
                             <Line type="monotone" dataKey="equity" name="Equity" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                            <Line type="monotone" dataKey="drawdown" name="Drawdown" stroke="#ef4444" strokeWidth={2} dot={false} />
-                        </LineChart>
+                        </ComposedChart>
                     </ResponsiveContainer>
                 </div>
                 

@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { Structure, OptionLeg, MarketData, HistoricalImportData } from '../types';
 import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
 import useSettingsStore from './settingsStore';
+import { fetchLiveDaxPrice } from '../services/marketData';
 
 interface PortfolioState {
   structures: Structure[];
@@ -10,6 +11,7 @@ interface PortfolioState {
   nextStructureId: number;
   currentView: 'list' | 'detail' | 'settings' | 'analysis';
   currentStructureId: number | 'new' | null;
+  isLoadingSpot: boolean;
   
   addStructure: (structure: Omit<Structure, 'id' | 'status'>) => void;
   addHistoricalStructures: (structuresData: HistoricalImportData[]) => void;
@@ -19,6 +21,7 @@ interface PortfolioState {
   closeStructure: (structureId: number) => void;
   reopenStructure: (structureId: number) => void;
   setMarketData: (data: Partial<MarketData>) => void;
+  refreshDaxSpot: () => Promise<void>;
   setCurrentView: (view: 'list' | 'detail' | 'settings' | 'analysis', structureId?: number | 'new' | null) => void;
 }
 
@@ -148,6 +151,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => {
     nextStructureId: 67,
     currentView: 'list',
     currentStructureId: null,
+    isLoadingSpot: false,
 
     addStructure: (structure) => set((state) => ({ 
         structures: [...state.structures, { ...structure, id: state.nextStructureId, status: 'Active' }],
@@ -277,6 +281,21 @@ const usePortfolioStore = create<PortfolioState>((set, get) => {
         currentView: view,
         currentStructureId: structureId,
     }),
+    refreshDaxSpot: async () => {
+        set({ isLoadingSpot: true });
+        try {
+            const price = await fetchLiveDaxPrice();
+            if (price !== null) {
+                set((state) => ({ 
+                    marketData: { ...state.marketData, daxSpot: parseFloat(price.toFixed(2)) },
+                }));
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            set({ isLoadingSpot: false });
+        }
+    },
   };
 });
 

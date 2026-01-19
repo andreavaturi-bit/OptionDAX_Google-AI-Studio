@@ -3,7 +3,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import usePortfolioStore from '../store/portfolioStore';
 import { Structure, MarketData, CalculatedGreeks, Settings } from '../types';
 import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
-import { PlusIcon, ArchiveIcon, ScanIcon, PortfolioIcon, UploadIcon, EditIcon, TrashIcon } from './icons';
+import { PlusIcon, ArchiveIcon, ScanIcon, PortfolioIcon, UploadIcon, EditIcon, TrashIcon, CloudDownloadIcon } from './icons';
 import ImageAnalysisModal from './ImageAnalysisModal';
 import HistoricalImportModal from './HistoricalImportModal';
 import useSettingsStore from '../store/settingsStore';
@@ -78,7 +78,7 @@ const calculateUnrealizedPnlForStructure = (structure: Structure, marketData: Ma
 
 
 const StructureListView: React.FC = () => {
-    const { structures, setCurrentView, marketData, setMarketData, deleteStructures } = usePortfolioStore();
+    const { structures, setCurrentView, marketData, setMarketData, deleteStructures, refreshDaxSpot, isLoadingSpot } = usePortfolioStore();
     const { settings } = useSettingsStore();
     const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
@@ -178,7 +178,17 @@ const StructureListView: React.FC = () => {
                                     step="0.01"
                                 />
                                 <button onClick={() => handleSpotStep(1)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-l border-r border-gray-600 font-mono">+1</button>
-                                <button onClick={() => handleSpotStep(10)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 rounded-r-md font-mono">+10</button>
+                                <button onClick={() => handleSpotStep(10)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-r border-gray-600 font-mono">+10</button>
+                                <button 
+                                    onClick={refreshDaxSpot} 
+                                    disabled={isLoadingSpot}
+                                    className="px-2 py-1 text-accent hover:text-white hover:bg-gray-600 rounded-r-md transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Aggiorna Prezzo Live (Yahoo Finance)"
+                                >
+                                    <div className={isLoadingSpot ? "animate-spin" : ""}>
+                                        <CloudDownloadIcon />
+                                    </div>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -254,33 +264,33 @@ const StructureListView: React.FC = () => {
                                             <h2 className="font-bold text-lg text-white">{structure.tag}</h2>
                                             <p className="text-sm text-gray-400">{structure.legs.length} gamba/e</p>
                                         </div>
-                                        <div className="w-full sm:w-auto grid grid-cols-3 gap-x-4 gap-y-2 sm:flex sm:space-x-4 font-mono text-sm text-left sm:text-right">
-                                            <div>
-                                                <span className="text-xs text-gray-400">P/L Aperto</span>
+                                        <div className="w-full sm:w-auto grid grid-cols-3 gap-x-4 gap-y-2 sm:flex sm:gap-2 font-mono text-sm text-left sm:text-right">
+                                            <div className="sm:w-32">
+                                                <span className="text-xs text-gray-400 block">P/L Aperto</span>
                                                 <p className={`font-bold ${unrealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                                                     €{unrealizedPnl.toFixed(2)}
                                                 </p>
                                             </div>
-                                            <div>
-                                                <span className="text-xs text-gray-400">PDC</span>
+                                            <div className="sm:w-20">
+                                                <span className="text-xs text-gray-400 block">PDC</span>
                                                 <p className={netPremium > 0 ? 'text-loss' : 'text-profit'}>
                                                     {netPremium.toFixed(2)}
                                                 </p>
                                             </div>
-                                            <div>
-                                                <span className="text-xs text-gray-400">Δ Delta</span>
+                                            <div className="sm:w-16">
+                                                <span className="text-xs text-gray-400 block">Δ Delta</span>
                                                 <p className="text-white">{totalGreeks.delta.toFixed(2)}</p>
                                             </div>
-                                            <div>
-                                                <span className="text-xs text-gray-400">Γ Gamma</span>
+                                            <div className="sm:w-16">
+                                                <span className="text-xs text-gray-400 block">Γ Gamma</span>
                                                 <p className="text-white">{totalGreeks.gamma.toFixed(3)}</p>
                                             </div>
-                                            <div>
-                                                <span className="text-xs text-gray-400">Θ Theta</span>
+                                            <div className="sm:w-24">
+                                                <span className="text-xs text-gray-400 block">Θ Theta</span>
                                                 <p className="text-white">€{(totalGreeks.theta * structure.multiplier).toFixed(2)}</p>
                                             </div>
-                                            <div>
-                                                <span className="text-xs text-gray-400">ν Vega</span>
+                                            <div className="sm:w-24">
+                                                <span className="text-xs text-gray-400 block">ν Vega</span>
                                                 <p className="text-white">€{(totalGreeks.vega * structure.multiplier).toFixed(2)}</p>
                                             </div>
                                         </div>

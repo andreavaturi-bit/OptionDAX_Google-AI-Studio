@@ -1,3 +1,4 @@
+
 // Error function (erf) approximation using the same Abramowitz and Stegun constants for consistency.
 const erf = (x: number): number => {
     const a1 =  0.254829592;
@@ -91,4 +92,46 @@ export const getTimeToExpiry = (expiryDate: string): number => {
     if (diffTime <= 0) return 0;
     const diffDays = diffTime / (1000 * 60 * 60 * 24);
     return diffDays / 365.0;
+};
+
+// Calculate Implied Volatility using Newton-Raphson method
+export const calculateImpliedVolatility = (
+    targetPrice: number,
+    s: number,
+    k: number,
+    t: number,
+    r: number,
+    type: 'Call' | 'Put'
+): number | null => {
+    let vol = 20; // Initial guess (20%)
+    const maxIter = 100;
+    const epsilon = 0.001; // Precision
+
+    for (let i = 0; i < maxIter; i++) {
+        const bs = new BlackScholes(s, k, t, r, vol);
+        const price = type === 'Call' ? bs.callPrice() : bs.putPrice();
+        const diff = price - targetPrice;
+
+        if (Math.abs(diff) < epsilon) {
+            return vol;
+        }
+
+        // We use the Vega from our class.
+        // Our class returns Vega scaled by 100 (change in price per 1% vol change).
+        // Since `vol` variable is in percentage points (e.g. 20), this matches directly.
+        // NewVol = OldVol - (Price - Target) / (dPrice/dVol)
+        const vega = type === 'Call' ? bs.callGreeks().vega : bs.putGreeks().vega;
+
+        // Prevent division by zero or extremely small vega (deep ITM/OTM)
+        if (Math.abs(vega) < 1e-4) {
+            break; 
+        }
+
+        vol = vol - diff / vega;
+
+        // Clamp volatility to reasonable bounds
+        if (vol <= 0) vol = 0.1;
+    }
+    
+    return vol;
 };

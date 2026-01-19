@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { OptionLeg, MarketData, Structure, CalculatedGreeks } from '../types';
-import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
+import { BlackScholes, getTimeToExpiry, calculateImpliedVolatility } from '../services/blackScholes';
 import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import PayoffChart from './PayoffChart';
-import { PlusIcon, TrashIcon, CalculatorIcon } from './icons';
+import { PlusIcon, TrashIcon, CalculatorIcon, CloudDownloadIcon } from './icons';
 import ExpiryDateSelector, { findThirdFridayOfMonth } from './ExpiryDateSelector';
 import QuantitySelector from './QuantitySelector';
 import StrikeSelector from './StrikeSelector';
@@ -28,7 +28,7 @@ interface StructureDetailViewProps {
 }
 
 const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }) => {
-    const { structures, marketData, setMarketData, addStructure, updateStructure, deleteStructure, closeStructure, reopenStructure, setCurrentView } = usePortfolioStore();
+    const { structures, marketData, setMarketData, addStructure, updateStructure, deleteStructure, closeStructure, reopenStructure, setCurrentView, refreshDaxSpot, isLoadingSpot } = usePortfolioStore();
     const { settings } = useSettingsStore();
     const [localStructure, setLocalStructure] = useState<Omit<Structure, 'id' | 'status'> | Structure | null>(null);
     const [isReadOnly, setIsReadOnly] = useState(false);
@@ -105,6 +105,28 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
 
              handleLegChange(id, field, finalValue);
              
+             // Auto-Calculate Implied Volatility if Trade Price changes
+             if (field === 'tradePrice' && finalValue !== null && localStructure && !isReadOnly) {
+                 const leg = localStructure.legs.find(l => l.id === id);
+                 if (leg) {
+                     const timeToExpiry = getTimeToExpiry(leg.expiryDate);
+                     if (timeToExpiry > 0) {
+                         const calculatedIV = calculateImpliedVolatility(
+                             finalValue,
+                             marketData.daxSpot,
+                             leg.strike,
+                             timeToExpiry,
+                             marketData.riskFreeRate,
+                             leg.optionType
+                         );
+                         if (calculatedIV !== null && !isNaN(calculatedIV)) {
+                             // Update the leg with the new IV
+                             handleLegChange(id, 'impliedVolatility', parseFloat(calculatedIV.toFixed(2)));
+                         }
+                     }
+                 }
+             }
+
              setLocalInputValues(prev => {
                 const newValues = { ...prev };
                 delete newValues[key];
@@ -335,7 +357,17 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                             step="0.01"
                         />
                         <button onClick={() => handleSpotStep(1)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-l border-r border-gray-600 font-mono">+1</button>
-                        <button onClick={() => handleSpotStep(10)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 rounded-r-md font-mono">+10</button>
+                        <button onClick={() => handleSpotStep(10)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-r border-gray-600 font-mono">+10</button>
+                        <button 
+                            onClick={refreshDaxSpot} 
+                            disabled={isLoadingSpot}
+                            className="px-2 py-1 text-accent hover:text-white hover:bg-gray-600 rounded-r-md transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Aggiorna Prezzo Live (Yahoo Finance)"
+                        >
+                            <div className={isLoadingSpot ? "animate-spin" : ""}>
+                                <CloudDownloadIcon />
+                            </div>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -555,7 +587,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                         const grossPnlClass = pnl.grossPnlEuro >= 0 ? 'text-profit' : 'text-loss';
                                         return (
                                             <tr key={pnl.id} className={`border-b border-gray-700 hover:bg-gray-700/50 ${pnl.isClosed ? 'opacity-60' : ''}`}>
-                                                <td className="px-2 py-1 font-sans font-medium">#{index + 1} {pnl.isClosed ? '(Chiusa)' : ''}</td>
+                                                <td className="px-2 py-1 font-sans font-medium text-white">#{index + 1} {pnl.isClosed ? '(Chiusa)' : ''}</td>
                                                 <td className={`px-2 py-1 text-right ${pnl.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{pnl.pnlPoints.toFixed(2)}</td>
                                                 <td className={`px-2 py-1 text-right ${grossPnlClass}`}>€{pnl.grossPnlEuro.toFixed(2)}</td>
                                                 <td className="px-2 py-1 text-right text-warning">-€{pnl.commissionCost.toFixed(2)}</td>
@@ -566,7 +598,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                 </tbody>
                                 <tfoot className="font-mono font-bold text-white">
                                     <tr className="bg-gray-700/50">
-                                        <td className="px-2 py-1 font-sans" colSpan={2}>Realizzato</td>
+                                        <td className="px-2 py-1 font-sans text-white" colSpan={2}>Realizzato</td>
                                         <td className={`px-2 py-1 text-right ${calculatedPnl.totalRealizedGross >= 0 ? 'text-profit' : 'text-loss'}`}>
                                             €{calculatedPnl.totalRealizedGross.toFixed(2)}
                                         </td>
@@ -578,7 +610,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                         </td>
                                     </tr>
                                      <tr className="bg-gray-700/50">
-                                        <td className="px-2 py-1 font-sans" colSpan={2}>Non Realizzato</td>
+                                        <td className="px-2 py-1 font-sans text-white" colSpan={2}>Non Realizzato</td>
                                         <td className={`px-2 py-1 text-right ${calculatedPnl.totalUnrealizedGross >= 0 ? 'text-profit' : 'text-loss'}`}>
                                             €{calculatedPnl.totalUnrealizedGross.toFixed(2)}
                                         </td>
@@ -590,7 +622,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                         </td>
                                     </tr>
                                     <tr className="bg-gray-900">
-                                        <td className="px-2 py-2 font-sans" colSpan={2}>TOTALE</td>
+                                        <td className="px-2 py-2 font-sans text-white" colSpan={2}>TOTALE</td>
                                         <td className={`px-2 py-2 text-right text-lg ${calculatedPnl.grandTotalGross >= 0 ? 'text-profit' : 'text-loss'}`}>
                                             €{calculatedPnl.grandTotalGross.toFixed(2)}
                                         </td>
@@ -621,22 +653,22 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                         const greeks = calculatedGreeks.legGreeks.find(g => g.id === leg.id);
                                         return (
                                             <tr key={leg.id} className="border-b border-gray-700 hover:bg-gray-700/50">
-                                                <td className="px-4 py-1 font-sans font-medium">#{leg.id} {leg.quantity > 0 ? 'L' : 'S'} {leg.optionType.slice(0,1)} @{leg.strike}</td>
-                                                <td className="px-4 py-1 text-right">{greeks?.delta.toFixed(2)}</td>
-                                                <td className="px-4 py-1 text-right">{greeks?.gamma.toFixed(3)}</td>
-                                                <td className="px-4 py-1 text-right">€{((greeks?.theta ?? 0) * localStructure.multiplier).toFixed(2)}</td>
-                                                <td className="px-4 py-1 text-right">€{((greeks?.vega ?? 0) * localStructure.multiplier).toFixed(2)}</td>
+                                                <td className="px-4 py-1 font-sans font-medium text-white">#{leg.id} {leg.quantity > 0 ? 'L' : 'S'} {leg.optionType.slice(0,1)} @{leg.strike}</td>
+                                                <td className="px-4 py-1 text-right text-white">{greeks?.delta.toFixed(2)}</td>
+                                                <td className="px-4 py-1 text-right text-white">{greeks?.gamma.toFixed(3)}</td>
+                                                <td className="px-4 py-1 text-right text-white">€{((greeks?.theta ?? 0) * localStructure.multiplier).toFixed(2)}</td>
+                                                <td className="px-4 py-1 text-right text-white">€{((greeks?.vega ?? 0) * localStructure.multiplier).toFixed(2)}</td>
                                             </tr>
                                         );
                                     })}
                                 </tbody>
                                 <tfoot className="font-mono font-bold text-white">
                                     <tr className="bg-gray-700">
-                                        <td className="px-4 py-2 font-sans">TOTALI</td>
-                                        <td className="px-4 py-2 text-right">{calculatedGreeks.totalGreeks.delta.toFixed(2)}</td>
-                                        <td className="px-4 py-2 text-right">{calculatedGreeks.totalGreeks.gamma.toFixed(3)}</td>
-                                        <td className="px-4 py-2 text-right">€{(calculatedGreeks.totalGreeks.theta * localStructure.multiplier).toFixed(2)}</td>
-                                        <td className="px-4 py-2 text-right">€{(calculatedGreeks.totalGreeks.vega * localStructure.multiplier).toFixed(2)}</td>
+                                        <td className="px-4 py-2 font-sans text-white">TOTALI</td>
+                                        <td className="px-4 py-2 text-right text-white">{calculatedGreeks.totalGreeks.delta.toFixed(2)}</td>
+                                        <td className="px-4 py-2 text-right text-white">{calculatedGreeks.totalGreeks.gamma.toFixed(3)}</td>
+                                        <td className="px-4 py-2 text-right text-white">€{(calculatedGreeks.totalGreeks.theta * localStructure.multiplier).toFixed(2)}</td>
+                                        <td className="px-4 py-2 text-right text-white">€{(calculatedGreeks.totalGreeks.vega * localStructure.multiplier).toFixed(2)}</td>
                                     </tr>
                                 </tfoot>
                             </table>

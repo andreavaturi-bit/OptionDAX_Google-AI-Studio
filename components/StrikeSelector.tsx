@@ -48,6 +48,7 @@ const getStrikeStyle = (strike: number, spotPrice: number, optionType: 'Call' | 
 const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPrice, optionType, disabled, className }) => {
     const [isOpen, setIsOpen] = useState(false);
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const listRef = useRef<HTMLUListElement>(null);
     const [inputValue, setInputValue] = useState(value.toString());
 
     useEffect(() => {
@@ -72,12 +73,27 @@ const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPr
         return options;
     }, [spotPrice, value]);
     
+    // Improved scrolling logic to center the selected option
     useEffect(() => {
-        if (isOpen) {
-            const optionEl = document.getElementById(`strike-option-${value}`);
-            if (optionEl) {
-                optionEl.scrollIntoView({ block: 'center' });
-            }
+        if (isOpen && listRef.current) {
+            // Slight delay to ensure the DOM is fully rendered and layout is calculated
+            const timer = setTimeout(() => {
+                const list = listRef.current;
+                if (!list) return;
+
+                // Find the element with the matching data-strike attribute
+                const selectedOption = list.querySelector(`[data-strike="${value}"]`) as HTMLElement;
+                
+                if (selectedOption) {
+                    // Calculate scroll position to center the element
+                    const listHeight = list.clientHeight;
+                    const optionTop = selectedOption.offsetTop;
+                    const optionHeight = selectedOption.clientHeight;
+                    
+                    list.scrollTop = optionTop - listHeight / 2 + optionHeight / 2;
+                }
+            }, 10); // Increased from 0 to 10ms to be more reliable
+            return () => clearTimeout(timer);
         }
     }, [isOpen, value]);
 
@@ -130,13 +146,14 @@ const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPr
 
             {isOpen && (
                 <ul
+                    ref={listRef}
                     className="absolute z-50 mt-1 w-full bg-gray-600 border border-gray-500 rounded-md shadow-lg max-h-60 overflow-y-auto left-0"
                     role="listbox"
                 >
                     {strikeOptions.map(strike => (
                         <li
                             key={strike}
-                            id={`strike-option-${strike}`}
+                            data-strike={strike} // Added for querySelector
                             style={getStrikeStyle(strike, spotPrice, optionType)}
                             className={`px-3 py-2 cursor-pointer hover:bg-accent/50 ${value === strike ? 'bg-accent/70' : ''}`}
                             onClick={() => handleSelect(strike)}
