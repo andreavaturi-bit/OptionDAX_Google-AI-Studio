@@ -1,0 +1,122 @@
+import React, { useState, useEffect } from 'react';
+import useSettingsStore from '../store/settingsStore';
+import usePortfolioStore from '../store/portfolioStore';
+import { Settings } from '../types';
+
+const SettingsView: React.FC = () => {
+    const { settings, updateSettings } = useSettingsStore();
+    const { setCurrentView } = usePortfolioStore();
+    const [localSettings, setLocalSettings] = useState<Settings>(settings);
+    const [isSaved, setIsSaved] = useState(false);
+
+    useEffect(() => {
+        setLocalSettings(settings);
+    }, [settings]);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+        const { name, value } = e.target;
+        const isNumeric = ['initialCapital', 'defaultOpeningCommission', 'defaultClosingCommission', 'defaultMultiplier'].includes(name);
+        setLocalSettings(prev => ({
+            ...prev,
+            [name]: isNumeric ? parseFloat(value) || 0 : value,
+        }));
+    };
+
+    const handleSave = () => {
+        updateSettings(localSettings);
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 2000); // Hide message after 2 seconds
+    };
+
+    return (
+        <div className="max-w-2xl mx-auto space-y-6">
+            <button onClick={() => setCurrentView('list')} className="text-accent hover:underline mb-4">
+                &larr; Torna alla Lista
+            </button>
+
+            <div className="bg-gray-800 rounded-lg p-6">
+                <h1 className="text-2xl font-bold text-white mb-6">Impostazioni Generali</h1>
+
+                <div className="space-y-4">
+                    <div>
+                        <label htmlFor="initialCapital" className="block text-sm font-medium text-gray-400">Capitale Iniziale (€)</label>
+                        <input
+                            type="number"
+                            id="initialCapital"
+                            name="initialCapital"
+                            value={localSettings.initialCapital}
+                            onChange={handleChange}
+                            className="mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white focus:ring-2 focus:ring-accent focus:border-accent outline-none"
+                        />
+                    </div>
+
+                    <div>
+                        <label htmlFor="broker" className="block text-sm font-medium text-gray-400">Broker</label>
+                        <select
+                            id="broker"
+                            name="broker"
+                            value={localSettings.broker}
+                            onChange={handleChange}
+                            className="mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white focus:ring-2 focus:ring-accent focus:border-accent outline-none"
+                        >
+                            <option>AvaOptions</option>
+                            <option>BGSaxo</option>
+                            <option>Interactive Brokers</option>
+                            <option>Webank</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label htmlFor="defaultMultiplier" className="block text-sm font-medium text-gray-400">Prodotto di Default</label>
+                        <select
+                            id="defaultMultiplier"
+                            name="defaultMultiplier"
+                            value={localSettings.defaultMultiplier}
+                            onChange={handleChange}
+                            className="mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white focus:ring-2 focus:ring-accent focus:border-accent outline-none"
+                        >
+                            <option value="5">Indice (5€/punto)</option>
+                            <option value="1">CFD (1€/punto)</option>
+                        </select>
+                    </div>
+                     <div>
+                        <label htmlFor="defaultOpeningCommission" className="block text-sm font-medium text-gray-400">Commissione di Apertura Default (per contratto)</label>
+                        <input
+                            type="number"
+                            id="defaultOpeningCommission"
+                            name="defaultOpeningCommission"
+                            step="0.01"
+                            value={localSettings.defaultOpeningCommission}
+                            onChange={handleChange}
+                            className="mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white focus:ring-2 focus:ring-accent focus:border-accent outline-none"
+                        />
+                    </div>
+                     <div>
+                        <label htmlFor="defaultClosingCommission" className="block text-sm font-medium text-gray-400">Commissione di Chiusura Default (per contratto)</label>
+                        <input
+                            type="number"
+                            id="defaultClosingCommission"
+                            name="defaultClosingCommission"
+                            step="0.01"
+                            value={localSettings.defaultClosingCommission}
+                            onChange={handleChange}
+                            className="mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white focus:ring-2 focus:ring-accent focus:border-accent outline-none"
+                        />
+                    </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end">
+                    {isSaved && <span className="text-sm text-profit mr-4">Impostazioni salvate!</span>}
+                    <button
+                        onClick={handleSave}
+                        className="bg-accent hover:bg-accent/80 text-white font-bold py-2 px-4 rounded-md transition"
+                    >
+                        Salva Modifiche
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default SettingsView;
