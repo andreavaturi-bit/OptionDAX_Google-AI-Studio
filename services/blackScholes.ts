@@ -84,14 +84,20 @@ export class BlackScholes {
 
 export const getTimeToExpiry = (expiryDate: string): number => {
     // BUG FIX: Ensure consistent UTC calculation.
-    // An expiryDate string like 'YYYY-MM-DD' is parsed by `new Date()` as midnight UTC.
-    // `Date.now()` returns milliseconds since epoch in UTC.
-    // This correctly compares UTC expiry time with the current UTC time.
     const expiry = new Date(expiryDate);
     const diffTime = expiry.getTime() - Date.now();
     if (diffTime <= 0) return 0;
     const diffDays = diffTime / (1000 * 60 * 60 * 24);
     return diffDays / 365.0;
+};
+
+// Calcola la frazione di anno tra due date specifiche (in formato YYYY-MM-DD o Date object)
+export const getYearFraction = (fromDate: string | number, toDate: string): number => {
+    const start = new Date(fromDate);
+    const end = new Date(toDate);
+    const diffTime = end.getTime() - start.getTime();
+    if (diffTime <= 0) return 0;
+    return (diffTime / (1000 * 60 * 60 * 24)) / 365.0;
 };
 
 // Calculate Implied Volatility using Newton-Raphson method
@@ -116,20 +122,14 @@ export const calculateImpliedVolatility = (
             return vol;
         }
 
-        // We use the Vega from our class.
-        // Our class returns Vega scaled by 100 (change in price per 1% vol change).
-        // Since `vol` variable is in percentage points (e.g. 20), this matches directly.
-        // NewVol = OldVol - (Price - Target) / (dPrice/dVol)
         const vega = type === 'Call' ? bs.callGreeks().vega : bs.putGreeks().vega;
 
-        // Prevent division by zero or extremely small vega (deep ITM/OTM)
         if (Math.abs(vega) < 1e-4) {
             break; 
         }
 
         vol = vol - diff / vega;
 
-        // Clamp volatility to reasonable bounds
         if (vol <= 0) vol = 0.1;
     }
     

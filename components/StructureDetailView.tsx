@@ -1,30 +1,29 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { OptionLeg, MarketData, Structure, CalculatedGreeks } from '../types';
-import { BlackScholes, getTimeToExpiry, calculateImpliedVolatility } from '../services/blackScholes';
+import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
 import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import PayoffChart from './PayoffChart';
-import { PlusIcon, TrashIcon, CalculatorIcon, CloudDownloadIcon } from './icons';
+import { PlusIcon, TrashIcon, CloudDownloadIcon, CalculatorIcon, ArchiveIcon } from './icons';
 import ExpiryDateSelector, { findThirdFridayOfMonth } from './ExpiryDateSelector';
 import QuantitySelector from './QuantitySelector';
 import StrikeSelector from './StrikeSelector';
 
-const CheckCircleIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline-block mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
-)
-
 const ReopenIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+        <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
     </svg>
 );
 
+const MagicWandIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.8 6.5 10.866a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
+    </svg>
+);
 
 interface StructureDetailViewProps {
-    structureId: number | 'new' | null;
+    structureId: string | 'new' | null;
 }
 
 const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }) => {
@@ -32,8 +31,39 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
     const { settings } = useSettingsStore();
     const [localStructure, setLocalStructure] = useState<Omit<Structure, 'id' | 'status'> | Structure | null>(null);
     const [isReadOnly, setIsReadOnly] = useState(false);
-    const [localInputValues, setLocalInputValues] = useState<Record<string, string>>({});
+    const [isSaving, setIsSaving] = useState(false);
+    const [validationMessage, setValidationMessage] = useState<{title: string, message: string} | null>(null);
+    
+    // Local Spot Price for Simulation
+    const [simulatedSpot, setSimulatedSpot] = useState<number>(marketData.daxSpot);
+    const [isLiveMode, setIsLiveMode] = useState(true);
 
+    // Sync simulated spot with market data when market data changes if in Live Mode
+    useEffect(() => {
+        if (isLiveMode) {
+            setSimulatedSpot(marketData.daxSpot);
+        }
+    }, [marketData.daxSpot, isLiveMode]);
+
+    // Update simulated spot if user refreshes manually via the button
+    const handleRefreshSpot = async () => {
+        await refreshDaxSpot();
+        // Effect will handle update if isLiveMode is true
+    };
+
+    const handleSpotChange = (val: number) => {
+        setSimulatedSpot(val);
+        setIsLiveMode(false);
+    };
+
+    const resetToLive = () => {
+        setIsLiveMode(true);
+        setSimulatedSpot(marketData.daxSpot);
+    };
+
+    // Stati per la conferma in due step
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [confirmClose, setConfirmClose] = useState(false);
 
     useEffect(() => {
         if (structureId === 'new') {
@@ -45,637 +75,704 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             setIsReadOnly(false);
         } else {
             const structure = structures.find(s => s.id === structureId);
-            setLocalStructure(structure || null);
-            setIsReadOnly(structure?.status === 'Closed');
+            if (structure) {
+                setLocalStructure(JSON.parse(JSON.stringify(structure)));
+                setIsReadOnly(structure.status === 'Closed');
+            }
         }
-        setLocalInputValues({}); // Reset local string inputs on structure change
-    }, [structureId, structures, settings.defaultMultiplier]);
+    }, [structureId]);
     
-    const handleLegChange = (id: number, field: keyof Omit<OptionLeg, 'id'>, value: string | number | null) => {
+    // Reset confirmation states when structure changes
+    useEffect(() => {
+        setConfirmDelete(false);
+        setConfirmClose(false);
+        setValidationMessage(null);
+    }, [structureId]);
+
+    const calculateLegFairValue = (leg: OptionLeg): number => {
+        const timeToExpiry = getTimeToExpiry(leg.expiryDate);
+        const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
+        const price = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
+        return parseFloat(price.toFixed(2));
+    };
+
+    const handleLegChange = useCallback((id: string, field: keyof Omit<OptionLeg, 'id'>, value: any) => {
         if (!localStructure || isReadOnly) return;
         
-        let updatedLegs = localStructure.legs.map(leg => {
-            if (leg.id === id) {
-                 let newLeg = { ...leg, [field]: value };
-                
-                // Auto-set closingDate when closingPrice is entered
-                if (field === 'closingPrice') {
-                    const hasClosingPrice = newLeg.closingPrice !== null && newLeg.closingPrice !== undefined && value !== null && value !== '';
-                    if (hasClosingPrice && !newLeg.closingDate) {
-                        newLeg.closingDate = new Date().toISOString().split('T')[0];
-                    } else if (!hasClosingPrice) {
-                        newLeg.closingDate = null;
+        setLocalStructure(prev => {
+            if (!prev) return null;
+            const updatedLegs = prev.legs.map(leg => {
+                if (leg.id === id) {
+                    const newLeg = { ...leg, [field]: value };
+                    
+                    // Automazione: Se inserisco prezzo chiusura e la data è vuota, metti oggi
+                    if (field === 'closingPrice' && value !== '' && value !== null) {
+                        if (!newLeg.closingDate) {
+                            newLeg.closingDate = new Date().toISOString().split('T')[0];
+                        }
                     }
+                    return newLeg;
                 }
-
-                return newLeg;
-            }
-            return leg;
-        });
-
-        setLocalStructure({ ...localStructure, legs: updatedLegs });
-    };
-
-    // FIX: Changed 'field' type from 'keyof OptionLeg' to 'keyof Omit<OptionLeg, 'id'>' to prevent passing 'id' to handleLegChange.
-    const handleNumericInputChange = (id: number, field: keyof Omit<OptionLeg, 'id'>, value: string) => {
-        const key = `${id}-${String(field)}`;
-        const sanitizedValue = value.replace(',', '.');
-
-        if (/^-?\d*\.?\d*$/.test(sanitizedValue) || sanitizedValue === '') {
-            setLocalInputValues(prev => ({ ...prev, [key]: sanitizedValue }));
-            
-            const parsed = parseFloat(sanitizedValue);
-            if (!isNaN(parsed) && isFinite(parsed)) {
-                handleLegChange(id, field, parsed);
-            } else if (sanitizedValue === '') {
-                 handleLegChange(id, field, null);
-            }
-        }
-    };
-
-    // FIX: Changed 'field' type from 'keyof OptionLeg' to 'keyof Omit<OptionLeg, 'id'>' to prevent passing 'id' to handleLegChange.
-    const handleNumericInputBlur = (id: number, field: keyof Omit<OptionLeg, 'id'>) => {
-        const key = `${id}-${String(field)}`;
-        const localValue = localInputValues[key];
-
-        if (localValue !== undefined) {
-             const sanitizedValue = localValue.replace(',', '.');
-             const parsed = parseFloat(sanitizedValue);
-             const finalValue = !isNaN(parsed) && isFinite(parsed) ? parsed : null;
-
-             handleLegChange(id, field, finalValue);
-             
-             // Auto-Calculate Implied Volatility if Trade Price changes
-             if (field === 'tradePrice' && finalValue !== null && localStructure && !isReadOnly) {
-                 const leg = localStructure.legs.find(l => l.id === id);
-                 if (leg) {
-                     const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-                     if (timeToExpiry > 0) {
-                         const calculatedIV = calculateImpliedVolatility(
-                             finalValue,
-                             marketData.daxSpot,
-                             leg.strike,
-                             timeToExpiry,
-                             marketData.riskFreeRate,
-                             leg.optionType
-                         );
-                         if (calculatedIV !== null && !isNaN(calculatedIV)) {
-                             // Update the leg with the new IV
-                             handleLegChange(id, 'impliedVolatility', parseFloat(calculatedIV.toFixed(2)));
-                         }
-                     }
-                 }
-             }
-
-             setLocalInputValues(prev => {
-                const newValues = { ...prev };
-                delete newValues[key];
-                return newValues;
+                return leg;
             });
+            return { ...prev, legs: updatedLegs };
+        });
+    }, [localStructure, isReadOnly]);
+
+    const setFairValueAsTradePrice = (id: string) => {
+        if (!localStructure) return;
+        const leg = localStructure.legs.find(l => l.id === id);
+        if (leg) {
+            const fairValue = calculateLegFairValue(leg);
+            handleLegChange(id, 'tradePrice', fairValue);
         }
     };
-
 
     const addLeg = () => {
         if (!localStructure || isReadOnly) return;
-        const newId = localStructure.legs.length > 0 ? Math.max(...localStructure.legs.map(l => l.id)) + 1 : 1;
-        
-        // Calcola la scadenza predefinita: 3° venerdì del mese successivo
         const nextMonthDate = new Date();
-        nextMonthDate.setDate(1); // Evita problemi con le date di fine mese
-        nextMonthDate.setMonth(nextMonthDate.getMonth() + 1);
-        const defaultExpiryDate = findThirdFridayOfMonth(nextMonthDate.getFullYear(), nextMonthDate.getMonth());
-        const defaultExpiryString = defaultExpiryDate.toISOString().split('T')[0];
+        nextMonthDate.setUTCDate(1); 
+        nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1);
+        const defaultExpiry = findThirdFridayOfMonth(nextMonthDate.getUTCFullYear(), nextMonthDate.getUTCMonth()).toISOString().split('T')[0];
 
-        const newLeg: OptionLeg = {
-            id: newId,
+        // Creazione temporanea per calcolo Fair Value iniziale
+        const tempLeg: OptionLeg = {
+            id: 'temp',
             optionType: 'Call',
-            strike: Math.round(marketData.daxSpot / 100) * 100,
-            expiryDate: defaultExpiryString,
+            strike: Math.round(simulatedSpot / 25) * 25,
+            expiryDate: defaultExpiry,
             openingDate: new Date().toISOString().split('T')[0],
             quantity: 1,
-            tradePrice: 100,
+            tradePrice: 0,
+            impliedVolatility: 15,
+        };
+        const initialFairValue = calculateLegFairValue(tempLeg);
+
+        const newLeg: OptionLeg = {
+            id: Math.random().toString(36).substring(2) + Date.now().toString(36),
+            optionType: 'Call',
+            strike: Math.round(simulatedSpot / 25) * 25,
+            expiryDate: defaultExpiry,
+            openingDate: new Date().toISOString().split('T')[0],
+            quantity: 1,
+            tradePrice: initialFairValue, // Default al Fair Value
             closingPrice: null,
             closingDate: null,
             impliedVolatility: 15,
             openingCommission: settings.defaultOpeningCommission,
             closingCommission: settings.defaultClosingCommission,
+            enabled: true,
         };
         setLocalStructure({ ...localStructure, legs: [...localStructure.legs, newLeg] });
     };
-    
-    const removeLeg = (id: number) => {
-        if (!localStructure || isReadOnly) return;
-        const updatedLegs = localStructure.legs.filter(leg => leg.id !== id);
-        setLocalStructure({ ...localStructure, legs: updatedLegs });
-    };
 
-    const handleSave = () => {
-        if (!localStructure || isReadOnly) return;
-        if ('id' in localStructure) {
-            updateStructure(localStructure as Structure);
-        } else {
-            addStructure(localStructure);
+    const handleSaveAction = async () => {
+        if (!localStructure || isReadOnly || isSaving) return;
+        
+        if (!localStructure.tag.trim()) { 
+            setValidationMessage({
+                title: "Nome Mancante",
+                message: "Per favore, assegna un nome alla strategia (Tag) prima di salvare."
+            });
+            return; 
         }
-        setCurrentView('list');
-    };
-    
-    const handleClose = () => {
-        if (!localStructure || !('id' in localStructure) || isReadOnly) return;
-        closeStructure(localStructure.id);
-        setCurrentView('list');
-    };
+        
+        if (localStructure.legs.length === 0) { 
+            setValidationMessage({
+                title: "Nessuna Gamba",
+                message: "La strategia deve contenere almeno una gamba per essere salvata."
+            });
+            return; 
+        }
 
-    const handleDelete = () => {
-        if (!localStructure || !('id' in localStructure)) return;
-        if (window.confirm(`Sei sicuro di voler eliminare permanentemente la struttura "${localStructure.tag}"? Questa azione è irreversibile.`)) {
-            deleteStructure(localStructure.id);
+        setIsSaving(true);
+        try {
+            if ('id' in localStructure && localStructure.id) {
+                await updateStructure(localStructure as Structure);
+            } else {
+                await addStructure(localStructure);
+            }
             setCurrentView('list');
+        } catch (error) {
+            console.error("Save error:", error);
+            setValidationMessage({
+                title: "Errore Salvataggio",
+                message: "Si è verificato un errore durante il salvataggio. Riprova."
+            });
+        } finally {
+            setIsSaving(false);
         }
     };
-    
-    const handleReopen = () => {
-        if (!localStructure || !('id' in localStructure)) return;
-        reopenStructure(localStructure.id);
+
+    const handleCloseAction = async () => {
+        if (!confirmClose) {
+            setConfirmClose(true);
+            setTimeout(() => setConfirmClose(false), 3000); // Reset dopo 3 secondi
+            return;
+        }
+
+        if (!localStructure || !('id' in localStructure) || isSaving) return;
+
+        const missingPrice = localStructure.legs.some(l => 
+            l.closingPrice === null || l.closingPrice === undefined || Number(l.closingPrice) === 0
+        );
+        
+        if (missingPrice) {
+            setValidationMessage({
+                title: "Dati Mancanti",
+                message: "Per archiviare la strategia, è necessario inserire il prezzo di chiusura per tutte le gambe."
+            });
+            setConfirmClose(false);
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            // CRITICAL FIX: Save the structure (and leg closing prices) BEFORE closing it.
+            // This ensures the DB has the latest closing prices entered in the UI.
+            await updateStructure(localStructure as Structure);
+
+            // Re-calculate analysis based on the latest localStructure state to get the correct PnL
+            // We use the same logic as the useMemo below, but imperatively here to ensure we capture current state
+            const finalPnl = analysis?.totals.pnl || 0;
+            
+            await closeStructure(localStructure.id, finalPnl);
+            setCurrentView('list');
+        } catch (error) {
+            console.error("Close error:", error);
+            setValidationMessage({
+                title: "Errore Chiusura",
+                message: "Si è verificato un errore durante la chiusura della strategia."
+            });
+        } finally {
+            setIsSaving(false);
+        }
     };
 
-    const calculatedGreeks = useMemo<{ legGreeks: (CalculatedGreeks & {id: number})[], totalGreeks: CalculatedGreeks }>(() => {
-        const initialGreeks = { delta: 0, gamma: 0, theta: 0, vega: 0 };
-        if (!localStructure) return { legGreeks: [], totalGreeks: initialGreeks };
+    const handleDeleteAction = async () => {
+        if (!confirmDelete) {
+            setConfirmDelete(true);
+            setTimeout(() => setConfirmDelete(false), 3000);
+            return;
+        }
 
-        const openLegs = localStructure.legs.filter(leg => leg.closingPrice === null || leg.closingPrice === undefined);
+        if (!localStructure || !('id' in localStructure) || isSaving) return;
+        
+        setIsSaving(true);
+        try {
+            await deleteStructure(localStructure.id);
+            setCurrentView('list'); 
+        } catch (error) {
+            console.error("Delete error:", error);
+            alert("Errore critico durante l'eliminazione.");
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
-        const legGreeks = openLegs.map(leg => {
+    const analysis = useMemo(() => {
+        if (!localStructure) return null;
+        
+        const legAnalysis = localStructure.legs.map(leg => {
+            // Get live data from store if available
+            const storeStructure = structures.find(s => s.id === (localStructure as any).id);
+            const storeLeg = storeStructure?.legs.find(l => l.id === leg.id);
+            
             const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-            const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
+            
+            // Use Live IV if in Live Mode, otherwise use Trade IV (or simulated IV if we had that control)
+            const volatilityToUse = isLiveMode && storeLeg?.currentIv ? storeLeg.currentIv : leg.impliedVolatility;
+            
+            const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
+            const fairValue = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
             const greeks = leg.optionType === 'Call' ? bs.callGreeks() : bs.putGreeks();
             
-            // FIX: Greeks are calculated purely in points here. Monetization is handled in the render.
+            // Check if specifically this leg is closed (has closing price)
+            const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0;
+            const currentPrice = isLegClosed ? Number(leg.closingPrice) : fairValue;
+            
+            // P&L calculation: (Exit - Entry) * Qty. 
+            // If Long (Qty > 0): (Current - Trade) * Qty.
+            // If Short (Qty < 0): (Trade - Current) * abs(Qty)  ==> (Current - Trade) * Qty works for both algebraicaly.
+            
+            const priceDiff = currentPrice - leg.tradePrice;
+            const pnlPoints = priceDiff * leg.quantity;
+            
+            const grossPnl = pnlPoints * localStructure.multiplier;
+            const commissions = ((leg.openingCommission || 0) + (leg.closingCommission || 0)) * Math.abs(leg.quantity);
+            const netPnl = grossPnl - commissions;
+
+            const thetaPoints = greeks.theta * leg.quantity;
+            const vegaPoints = greeks.vega * leg.quantity;
+
             return {
                 id: leg.id,
-                delta: greeks.delta * leg.quantity,
-                gamma: greeks.gamma * leg.quantity,
-                theta: greeks.theta * leg.quantity,
-                vega: greeks.vega * leg.quantity
-            };
-        });
-
-        const totalGreeks = legGreeks.reduce((acc, greeks) => {
-            acc.delta += greeks.delta;
-            acc.gamma += greeks.gamma;
-            acc.theta += greeks.theta;
-            acc.vega += greeks.vega;
-            return acc;
-        }, { ...initialGreeks });
-
-        return { legGreeks, totalGreeks };
-    }, [localStructure, marketData]);
-
-    const calculatedPnl = useMemo(() => {
-        if (!localStructure) return { legPnl: [], totalRealizedNet: 0, totalUnrealizedNet: 0, grandTotalNet: 0, totalRealizedGross: 0, totalUnrealizedGross: 0, grandTotalGross: 0, totalRealizedCommission: 0, totalUnrealizedCommission: 0, grandTotalCommission: 0 };
-
-        let totalRealizedGross = 0;
-        let totalRealizedCommission = 0;
-        let totalRealizedNet = 0;
-        let totalUnrealizedGross = 0;
-        let totalUnrealizedCommission = 0;
-        let totalUnrealizedNet = 0;
-
-
-        const legPnl = localStructure.legs.map(leg => {
-            const isClosed = leg.closingPrice !== null && leg.closingPrice !== undefined;
-            let pnlPoints = 0;
-            let currentPriceForLeg: number | null = null;
-            
-            if (isClosed) {
-                // Calculation for a closed leg based on trade and closing prices.
-                if (leg.quantity > 0) { // Long position
-                    pnlPoints = (leg.closingPrice! - leg.tradePrice) * leg.quantity;
-                } else { // Short position
-                    pnlPoints = (leg.tradePrice - leg.closingPrice!) * Math.abs(leg.quantity);
-                }
-            } else { // Calculation for an open leg based on current market price.
-                const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-                let currentPrice = 0;
-                if (timeToExpiry > 0) {
-                     const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
-                     currentPrice = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
-                } else { // If expired, value is intrinsic value.
-                     currentPrice = leg.optionType === 'Call' ? Math.max(0, marketData.daxSpot - leg.strike) : Math.max(0, leg.strike - marketData.daxSpot);
-                }
-                currentPriceForLeg = currentPrice;
-                
-                if (leg.quantity > 0) { // Long position
-                    pnlPoints = (currentPrice - leg.tradePrice) * leg.quantity;
-                } else { // Short position
-                    pnlPoints = (leg.tradePrice - currentPrice) * Math.abs(leg.quantity);
-                }
-            }
-            
-            const grossPnlEuro = pnlPoints * localStructure.multiplier;
-            const openingCommissionCost = (leg.openingCommission ?? settings.defaultOpeningCommission) * Math.abs(leg.quantity);
-            const closingCommissionCost = (leg.closingCommission ?? settings.defaultClosingCommission) * Math.abs(leg.quantity);
-            
-            // Full commission cost is accounted for both realized and unrealized P&L for a more accurate net equity view.
-            const commissionCost = openingCommissionCost + closingCommissionCost;
-            const netPnlEuro = grossPnlEuro - commissionCost;
-
-            if (isClosed) {
-                totalRealizedGross += grossPnlEuro;
-                totalRealizedCommission += commissionCost;
-                totalRealizedNet += netPnlEuro;
-            } else {
-                totalUnrealizedGross += grossPnlEuro;
-                totalUnrealizedCommission += commissionCost;
-                totalUnrealizedNet += netPnlEuro;
-            }
-            
-            return {
-                id: leg.id,
+                fairValue,
+                currentPrice, // Add this for display
                 pnlPoints,
-                grossPnlEuro,
-                commissionCost,
-                netPnlEuro,
-                isClosed,
-                currentPrice: currentPriceForLeg
+                grossPnl,
+                commissions,
+                netPnl,
+                isClosed: isLegClosed,
+                delta: greeks.delta * leg.quantity * 100, // Scaled by 100
+                gamma: greeks.gamma * leg.quantity,
+                theta: thetaPoints * localStructure.multiplier, // Euro
+                vega: vegaPoints * localStructure.multiplier,   // Euro
+                thetaPoints,
+                vegaPoints,
+                volatilityUsed: volatilityToUse // For debug/display
             };
         });
+
+        const totals = legAnalysis.reduce((acc, curr) => {
+            const leg = localStructure.legs.find(l => l.id === curr.id);
+            if (leg?.enabled === false) return acc;
+
+            acc.pnl += curr.netPnl;
+            acc.pnlPoints += curr.pnlPoints;
+            acc.gross += curr.grossPnl;
+            acc.comm += curr.commissions;
+            
+            if (!curr.isClosed) {
+                acc.delta += curr.delta;
+                acc.gamma += curr.gamma;
+                acc.theta += curr.theta;
+                acc.vega += curr.vega;
+                acc.thetaPoints += curr.thetaPoints;
+                acc.vegaPoints += curr.vegaPoints;
+            }
+            return acc;
+        }, { pnl: 0, pnlPoints: 0, gross: 0, comm: 0, delta: 0, gamma: 0, theta: 0, vega: 0, thetaPoints: 0, vegaPoints: 0 });
+
+        const realizedPnl = legAnalysis.filter(l => {
+            const leg = localStructure.legs.find(sl => sl.id === l.id);
+            return l.isClosed && leg?.enabled !== false;
+        }).reduce((acc, l) => acc + l.netPnl, 0);
         
-        const grandTotalGross = totalRealizedGross + totalUnrealizedGross;
-        const grandTotalCommission = totalRealizedCommission + totalUnrealizedCommission;
-        const grandTotalNet = totalRealizedNet + totalUnrealizedNet;
+        const realizedPoints = legAnalysis.filter(l => {
+            const leg = localStructure.legs.find(sl => sl.id === l.id);
+            return l.isClosed && leg?.enabled !== false;
+        }).reduce((acc, l) => acc + l.pnlPoints, 0);
+        
+        const unrealizedPnl = legAnalysis.filter(l => {
+            const leg = localStructure.legs.find(sl => sl.id === l.id);
+            return !l.isClosed && leg?.enabled !== false;
+        }).reduce((acc, l) => acc + l.netPnl, 0);
+        
+        const unrealizedPoints = legAnalysis.filter(l => {
+            const leg = localStructure.legs.find(sl => sl.id === l.id);
+            return !l.isClosed && leg?.enabled !== false;
+        }).reduce((acc, l) => acc + l.pnlPoints, 0);
 
-        return { legPnl, totalRealizedNet, totalUnrealizedNet, grandTotalNet, totalRealizedGross, totalUnrealizedGross, grandTotalGross, totalRealizedCommission, totalUnrealizedCommission, grandTotalCommission };
+        return { legAnalysis, totals, realizedPnl, realizedPoints, unrealizedPnl, unrealizedPoints };
+    }, [localStructure, simulatedSpot, marketData.riskFreeRate, isLiveMode, structures, marketData.daxVolatility]); // Use simulatedSpot
 
-    }, [localStructure, marketData, settings]);
+    if (!localStructure) return null;
 
-    const handleSpotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const value = e.target.value;
-        setMarketData({ daxSpot: value === '' ? 0 : parseFloat(value) });
-    };
-
-    const handleSpotStep = (amount: number) => {
-        setMarketData({ daxSpot: parseFloat((marketData.daxSpot + amount).toFixed(2)) });
-    };
-
-    if (!localStructure) return <div className="text-center text-gray-400">Caricamento struttura...</div>;
-
-    const disabledClass = "disabled:opacity-50 disabled:cursor-not-allowed";
-    
-    const calculateTheoreticalPrice = (leg: OptionLeg): number => {
-        const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-        if (timeToExpiry <= 0) {
-            return leg.optionType === 'Call' 
-                ? Math.max(0, marketData.daxSpot - leg.strike) 
-                : Math.max(0, leg.strike - marketData.daxSpot);
-        }
-        const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
-        return leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
-    };
+    const inputBaseClass = "bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded px-2 py-1.5 text-xs w-full outline-none focus:ring-1 focus:ring-accent disabled:opacity-60";
+    const labelClass = "text-[9px] font-bold text-slate-400 uppercase block mb-1 tracking-wider";
 
     return (
-        <div className="space-y-4">
-            <div className="flex justify-between items-center">
-                <button onClick={() => setCurrentView('list')} className="text-accent hover:underline">
-                    &larr; Torna alla Lista
-                </button>
-                 <div className="flex items-center space-x-2">
-                    <div className="text-sm font-medium text-gray-400 flex items-center">
-                        <span className="relative flex h-2 w-2 mr-2">
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                        </span>
-                        Spot DAX:
-                    </div>
-                    <div className="flex items-center bg-gray-700 border border-gray-600 rounded-md text-sm">
-                        <button onClick={() => handleSpotStep(-10)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 rounded-l-md font-mono">-10</button>
-                        <button onClick={() => handleSpotStep(-1)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-l border-r border-gray-600 font-mono">-1</button>
-                        <input
-                            type="number"
-                            value={marketData.daxSpot}
-                            onChange={handleSpotChange}
-                            className="bg-transparent w-24 text-center text-white font-mono focus:outline-none"
-                            step="0.01"
-                        />
-                        <button onClick={() => handleSpotStep(1)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-l border-r border-gray-600 font-mono">+1</button>
-                        <button onClick={() => handleSpotStep(10)} className="px-2 py-1 text-gray-300 hover:bg-gray-600 border-r border-gray-600 font-mono">+10</button>
-                        <button 
-                            onClick={refreshDaxSpot} 
-                            disabled={isLoadingSpot}
-                            className="px-2 py-1 text-accent hover:text-white hover:bg-gray-600 rounded-r-md transition disabled:opacity-50 disabled:cursor-not-allowed"
-                            title="Aggiorna Prezzo Live (Yahoo Finance)"
-                        >
-                            <div className={isLoadingSpot ? "animate-spin" : ""}>
-                                <CloudDownloadIcon />
+        <div className="space-y-6 max-w-[1600px] mx-auto pb-12">
+            {/* Header */}
+            <div className="flex flex-wrap gap-4 justify-between items-center">
+                <div className="flex items-center space-x-4">
+                    <button onClick={() => setCurrentView('list')} className="p-2 hover:bg-slate-200 dark:hover:bg-gray-700 rounded-full transition-colors">&larr;</button>
+                    <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+                        {structureId === 'new' ? 'Nuova Strategia' : localStructure.tag}
+                    </h1>
+                </div>
+                
+                <div className="flex items-center space-x-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-slate-200 dark:border-gray-700 shadow-sm">
+                    <button 
+                        onClick={() => isLiveMode ? setIsLiveMode(false) : resetToLive()}
+                        className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${isLiveMode ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-200 text-slate-500'}`}
+                    >
+                        {isLiveMode ? 'LIVE' : 'SIM'}
+                    </button>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-2">Spot</span>
+                    <input 
+                        type="number" 
+                        value={simulatedSpot} 
+                        onChange={e => handleSpotChange(parseFloat(e.target.value) || 0)} 
+                        className={`bg-transparent w-24 text-center font-mono font-bold outline-none ${isLiveMode ? 'text-slate-400' : 'text-accent'}`}
+                        readOnly={isLiveMode}
+                    />
+                    
+                    {/* Divider */}
+                    <div className="w-px h-4 bg-slate-200 dark:bg-gray-700 mx-2"></div>
+
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">VDAX</span>
+                    <span className={`font-mono font-bold text-sm ${isLiveMode ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400'}`}>
+                        {marketData.daxVolatility ? marketData.daxVolatility.toFixed(1) : '-'}%
+                    </span>
+
+                    {!isLiveMode && (
+                        <button onClick={handleRefreshSpot} disabled={isLoadingSpot} className={`p-2 rounded hover:bg-slate-100 dark:hover:bg-gray-700 text-accent ${isLoadingSpot ? 'animate-spin' : ''}`}>
+                            <CloudDownloadIcon />
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                {/* Left Column: Inputs */}
+                <div className="lg:col-span-5 space-y-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-slate-200 dark:border-gray-700 shadow-sm space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className={labelClass}>Nome Tag</label>
+                                <input type="text" value={localStructure.tag} onChange={e => setLocalStructure({...localStructure, tag: e.target.value})} className={inputBaseClass} placeholder="Es. Iron Condor" disabled={isReadOnly} />
                             </div>
+                            <div>
+                                <label className={labelClass}>Moltiplicatore</label>
+                                <select value={localStructure.multiplier} onChange={e => setLocalStructure({...localStructure, multiplier: parseInt(e.target.value) as 1 | 5 | 25})} className={inputBaseClass} disabled={isReadOnly}>
+                                    <option value="5">Indice (5€)</option>
+                                    <option value="1">CFD (1€)</option>
+                                    <option value="25">Future (25€)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                            {localStructure.legs.map((leg, idx) => (
+                                <div key={leg.id} className="p-4 rounded-xl border bg-white dark:bg-gray-800 border-slate-200 dark:border-gray-600 shadow-sm relative group">
+                                    <div className="flex justify-between items-center mb-3">
+                                        <div className="flex items-center space-x-2">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={leg.enabled !== false} 
+                                                onChange={(e) => handleLegChange(leg.id, 'enabled', e.target.checked)}
+                                                className="w-4 h-4 text-accent rounded focus:ring-accent cursor-pointer"
+                                                disabled={isReadOnly}
+                                                title={leg.enabled !== false ? "Disabilita Gamba" : "Abilita Gamba"}
+                                            />
+                                            <span className={`text-xs font-bold uppercase tracking-widest ${leg.enabled !== false ? 'text-slate-500' : 'text-slate-300 dark:text-gray-600'}`}>Gamba {idx + 1}</span>
+                                        </div>
+                                        {!isReadOnly && (
+                                            <button onClick={() => setLocalStructure({...localStructure, legs: localStructure.legs.filter(l => l.id !== leg.id)})} className="text-loss opacity-0 group-hover:opacity-100 transition-opacity p-1"><TrashIcon /></button>
+                                        )}
+                                    </div>
+
+                                    {/* Row 1: Basic Info */}
+                                    <div className={`grid grid-cols-10 gap-2 mb-3 ${leg.enabled === false ? 'opacity-50 pointer-events-none' : ''}`}>
+                                        <div className="col-span-3 flex rounded overflow-hidden border border-slate-200 dark:border-gray-600 h-[30px]">
+                                            <button onClick={() => handleLegChange(leg.id, 'optionType', 'Call')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Call' ? 'bg-accent text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Call</button>
+                                            <button onClick={() => handleLegChange(leg.id, 'optionType', 'Put')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Put' ? 'bg-warning text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Put</button>
+                                        </div>
+                                        <div className="col-span-2">
+                                            <QuantitySelector value={leg.quantity} onChange={v => handleLegChange(leg.id, 'quantity', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <StrikeSelector value={leg.strike} onChange={v => handleLegChange(leg.id, 'strike', v)} spotPrice={simulatedSpot} optionType={leg.optionType} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                                        </div>
+                                        <div className="col-span-3">
+                                            <ExpiryDateSelector value={leg.expiryDate} onChange={v => handleLegChange(leg.id, 'expiryDate', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                                        </div>
+                                    </div>
+
+                                    {/* Row 2: Advanced Inputs grouped */}
+                                    <div className="bg-slate-50 dark:bg-gray-900/50 p-4 rounded-xl border border-slate-100 dark:border-gray-700 space-y-6">
+                                        <div className="flex flex-col md:flex-row gap-8">
+                                            {/* Apertura */}
+                                            <div className="flex-1 space-y-4">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Apertura</span>
+                                                    {!isReadOnly && (
+                                                        <button onClick={() => setFairValueAsTradePrice(leg.id)} title="Imposta Fair Value" className="text-accent hover:scale-110 transition-transform active:scale-95">
+                                                            <MagicWandIcon />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <div className="space-y-3">
+                                                    <div>
+                                                        <label className={labelClass}>Prezzo Apertura</label>
+                                                        <input type="number" step="0.01" value={leg.tradePrice} onChange={e => handleLegChange(leg.id, 'tradePrice', parseFloat(e.target.value))} className={`${inputBaseClass} font-mono border-accent/20`} disabled={isReadOnly} />
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        <div className="min-w-0">
+                                                            <label className={`${labelClass} truncate`}>Data Apertura</label>
+                                                            <input type="date" value={leg.openingDate} onChange={e => handleLegChange(leg.id, 'openingDate', e.target.value)} className={inputBaseClass} disabled={isReadOnly} />
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <label className={`${labelClass} truncate`}>Comm. Ape.</label>
+                                                            <input type="number" step="0.01" value={leg.openingCommission || 0} onChange={e => handleLegChange(leg.id, 'openingCommission', parseFloat(e.target.value) || 0)} className={`${inputBaseClass} font-mono text-center`} disabled={isReadOnly} />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Vertical Divider */}
+                                            <div className="hidden md:block w-px bg-slate-200 dark:bg-gray-700 self-stretch"></div>
+
+                                            {/* Chiusura */}
+                                            <div className="flex-1 space-y-4">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Chiusura</span>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    <div>
+                                                        <label className={labelClass}>Prezzo Chiusura</label>
+                                                        <input type="number" step="0.01" placeholder="-" value={leg.closingPrice || ''} onChange={e => handleLegChange(leg.id, 'closingPrice', e.target.value === '' ? null : parseFloat(e.target.value))} className={`${inputBaseClass} font-mono`} disabled={isReadOnly} />
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        <div className="min-w-0">
+                                                            <label className={`${labelClass} truncate`}>Data Chiusura</label>
+                                                            <input type="date" value={leg.closingDate || ''} onChange={e => handleLegChange(leg.id, 'closingDate', e.target.value)} className={inputBaseClass} disabled={isReadOnly} />
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <label className={`${labelClass} truncate`}>Comm. Chi.</label>
+                                                            <input type="number" step="0.01" value={leg.closingCommission || 0} onChange={e => handleLegChange(leg.id, 'closingCommission', parseFloat(e.target.value) || 0)} className={`${inputBaseClass} font-mono text-center`} disabled={isReadOnly} />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* IV - Full Width */}
+                                        <div className="pt-5 border-t border-slate-200 dark:border-gray-700">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Volatilità Implicita (IV%)</label>
+                                                <div className="flex items-center space-x-2">
+                                                    <input 
+                                                        type="number" 
+                                                        value={leg.impliedVolatility} 
+                                                        onChange={e => handleLegChange(leg.id, 'impliedVolatility', parseFloat(e.target.value))} 
+                                                        className="w-16 bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-600 rounded px-2 py-1 text-xs font-mono text-center outline-none focus:ring-1 focus:ring-accent"
+                                                        disabled={isReadOnly}
+                                                    />
+                                                    <span className="text-[10px] font-bold text-slate-400">%</span>
+                                                </div>
+                                            </div>
+                                            <div className="px-1">
+                                                <input 
+                                                    type="range" 
+                                                    min="1" 
+                                                    max="100" 
+                                                    value={leg.impliedVolatility} 
+                                                    onChange={e => handleLegChange(leg.id, 'impliedVolatility', parseInt(e.target.value))}
+                                                    disabled={isReadOnly}
+                                                    className="w-full h-1.5 bg-slate-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-accent"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-4 space-y-3">
+                            {!isReadOnly ? (
+                                <>
+                                    <button onClick={addLeg} className="w-full py-2.5 bg-slate-50 dark:bg-gray-700/50 text-slate-500 font-bold rounded-xl border-2 border-dashed border-slate-200 dark:border-gray-600 hover:bg-slate-100 transition-colors flex items-center justify-center text-sm">
+                                        <PlusIcon className="mr-2" /> Aggiungi Gamba
+                                    </button>
+                                    <button 
+                                        onClick={handleSaveAction} 
+                                        disabled={isSaving} 
+                                        className="w-full py-3 bg-accent text-white font-bold rounded-xl shadow-lg shadow-accent/20 hover:bg-accent/90 transition-all disabled:opacity-50 text-sm"
+                                    >
+                                        {isSaving ? 'Salvataggio...' : 'Salva'}
+                                    </button>
+                                    {('id' in localStructure) && localStructure.id && (
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button 
+                                                onClick={handleCloseAction} 
+                                                disabled={isSaving} 
+                                                className={`py-3 font-bold rounded-xl border transition-all disabled:opacity-50 text-sm ${confirmClose ? 'bg-warning text-white border-warning' : 'bg-slate-100 dark:bg-gray-700 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-600'}`}
+                                            >
+                                                {confirmClose ? 'Confermi Chiusura?' : 'Chiudi Strategia'}
+                                            </button>
+                                            <button 
+                                                onClick={handleDeleteAction} 
+                                                disabled={isSaving} 
+                                                className={`py-3 font-bold rounded-xl border transition-all disabled:opacity-50 text-sm ${confirmDelete ? 'bg-red-600 text-white border-red-600' : 'bg-loss/10 text-loss border-loss/20'}`}
+                                            >
+                                                {confirmDelete ? 'Confermi?' : 'Elimina'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <button onClick={() => reopenStructure(localStructure.id)} className="w-full py-4 bg-accent text-white font-bold rounded-xl flex items-center justify-center shadow-lg transition-all active:scale-95 text-sm">
+                                    <ReopenIcon /> <span className="ml-2">Riapri per Modifica</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Right Column: Chart & Tables */}
+                <div className="lg:col-span-7 space-y-6">
+                    {/* Chart */}
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-slate-200 dark:border-gray-700 shadow-sm h-[450px]">
+                        <PayoffChart 
+                            legs={localStructure.legs.filter(l => l.enabled !== false)} 
+                            marketData={{...marketData, daxSpot: simulatedSpot}} 
+                            multiplier={localStructure.multiplier}
+                            structureStatus={('status' in localStructure) ? localStructure.status : 'Active'}
+                            realizedPnl={('realizedPnl' in localStructure) ? localStructure.realizedPnl : undefined}
+                        />
+                    </div>
+
+                    {/* Detailed Analysis Tables */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        
+                        {/* Table 1: P&L */}
+                        <div className="bg-white dark:bg-gray-800 rounded-xl border border-slate-200 dark:border-gray-700 overflow-hidden shadow-sm flex flex-col">
+                            <div className="px-4 py-3 bg-slate-50 dark:bg-gray-700/50 border-b border-slate-200 dark:border-gray-700">
+                                <h3 className="text-sm font-bold text-slate-800 dark:text-white">Analisi P&L</h3>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs text-right">
+                                    <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Gamba</th>
+                                            <th className="px-3 py-2">Prezzo Att.</th>
+                                            <th className="px-3 py-2">Punti</th>
+                                            <th className="px-3 py-2">Lordo</th>
+                                            <th className="px-3 py-2">Comm.</th>
+                                            <th className="px-3 py-2">Netto</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 dark:divide-gray-700 text-slate-700 dark:text-gray-300">
+                                        {analysis?.legAnalysis.map((row, i) => {
+                                            const leg = localStructure.legs.find(l => l.id === row.id);
+                                            const isEnabled = leg?.enabled !== false;
+                                            return (
+                                            <tr key={row.id} className={`${row.isClosed ? 'bg-slate-50/80 dark:bg-gray-900/30 text-slate-400' : ''} ${!isEnabled ? 'opacity-40 line-through decoration-slate-400' : ''}`}>
+                                                <td className="px-3 py-2 text-left font-mono">
+                                                    #{i + 1} {row.isClosed ? '(Chiusa)' : ''}
+                                                </td>
+                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
+                                                    {row.currentPrice.toFixed(2)}
+                                                    {row.volatilityUsed && isLiveMode && !row.isClosed && (
+                                                        <span className="text-[9px] text-slate-400 ml-1 block">IV: {row.volatilityUsed.toFixed(1)}%</span>
+                                                    )}
+                                                </td>
+                                                <td className={`px-3 py-2 font-mono ${row.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{row.pnlPoints.toFixed(2)}</td>
+                                                <td className={`px-3 py-2 font-mono ${row.grossPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{row.grossPnl.toFixed(2)}</td>
+                                                <td className="px-3 py-2 font-mono text-warning">-€{row.commissions.toFixed(2)}</td>
+                                                <td className={`px-3 py-2 font-mono font-bold ${row.netPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{row.netPnl.toFixed(2)}</td>
+                                            </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                    <tfoot className="bg-slate-50 dark:bg-gray-700/30 font-bold border-t border-slate-200 dark:border-gray-700">
+                                        <tr>
+                                            <td className="px-3 py-2 text-left text-slate-500">Realizzato</td>
+                                            <td className="px-3 py-2"></td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.realizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.realizedPoints.toFixed(2)}</td>
+                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.realizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.realizedPnl.toFixed(2)}</td>
+                                        </tr>
+                                        <tr>
+                                            <td className="px-3 py-2 text-left text-slate-500">Non Realizz.</td>
+                                            <td className="px-3 py-2"></td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.unrealizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.unrealizedPoints.toFixed(2)}</td>
+                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.unrealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.unrealizedPnl.toFixed(2)}</td>
+                                        </tr>
+                                        <tr className="bg-slate-100 dark:bg-gray-700">
+                                            <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totale</td>
+                                            <td className="px-3 py-2"></td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.totals.pnlPoints.toFixed(2)}</td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.gross >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.totals.gross.toFixed(2)}</td>
+                                            <td className="px-3 py-2 font-mono text-warning">-€{analysis?.totals.comm.toFixed(2)}</td>
+                                            <td className={`px-3 py-2 font-mono text-base ${analysis?.totals.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.totals.pnl.toFixed(2)}</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Table 2: Greeks - Hidden if closed */}
+                        {(!('status' in localStructure) || localStructure.status === 'Active') && (
+                        <div className="bg-white dark:bg-gray-800 rounded-xl border border-slate-200 dark:border-gray-700 overflow-hidden shadow-sm flex flex-col h-fit">
+                            <div className="px-4 py-3 bg-slate-50 dark:bg-gray-700/50 border-b border-slate-200 dark:border-gray-700">
+                                <h3 className="text-sm font-bold text-slate-800 dark:text-white">Analisi Greche (Gambe Aperte)</h3>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs text-right">
+                                    <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Gamba</th>
+                                            <th className="px-3 py-2">Delta</th>
+                                            <th className="px-3 py-2">Gamma</th>
+                                            <th className="px-3 py-2">Theta (Pts)</th>
+                                            <th className="px-3 py-2">Theta (€)</th>
+                                            <th className="px-3 py-2">Vega (Pts)</th>
+                                            <th className="px-3 py-2">Vega (€)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 dark:divide-gray-700 text-slate-700 dark:text-gray-300">
+                                        {analysis?.legAnalysis.filter(l => !l.isClosed).map((row, i) => {
+                                            const originalIndex = analysis.legAnalysis.indexOf(row);
+                                            const leg = localStructure.legs[originalIndex];
+                                            const isEnabled = leg?.enabled !== false;
+                                            return (
+                                                <tr key={row.id} className={!isEnabled ? 'opacity-40 line-through decoration-slate-400' : ''}>
+                                                    <td className="px-3 py-2 text-left font-mono truncate max-w-[100px]" title={`${leg.strike} ${leg.optionType}`}>
+                                                        #{originalIndex + 1} {leg.strike} {leg.optionType.charAt(0)}
+                                                    </td>
+                                                    <td className="px-3 py-2 font-mono">{row.delta.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 font-mono">{row.gamma.toFixed(3)}</td>
+                                                    <td className="px-3 py-2 font-mono">{row.thetaPoints.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 font-mono">€{row.theta.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 font-mono">{row.vegaPoints.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 font-mono">€{row.vega.toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                    <tfoot className="bg-slate-100 dark:bg-gray-700 font-bold border-t border-slate-200 dark:border-gray-700">
+                                        <tr>
+                                            <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totali</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.delta.toFixed(2)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.gamma.toFixed(3)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.thetaPoints.toFixed(2)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">€{analysis?.totals.theta.toFixed(2)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.vegaPoints.toFixed(2)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">€{analysis?.totals.vega.toFixed(2)}</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+                        )}
+                        {('status' in localStructure) && localStructure.status === 'Closed' && (
+                            <div className="bg-slate-50 dark:bg-gray-800/50 rounded-xl border border-slate-200 dark:border-gray-700 flex flex-col items-center justify-center p-8 text-center text-slate-400">
+                                <ArchiveIcon />
+                                <p className="mt-2 text-sm font-medium">Strategia Chiusa</p>
+                                <p className="text-xs">Nessun rischio greco attivo</p>
+                            </div>
+                        )}
+
+                    </div>
+                </div>
+            </div>
+            {/* Validation Modal */}
+            {validationMessage && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-200 dark:border-gray-700 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-center justify-center w-12 h-12 rounded-full bg-warning/10 text-warning mb-4 mx-auto">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2 text-center">{validationMessage.title}</h3>
+                        <p className="text-slate-600 dark:text-gray-300 mb-6 text-center text-sm">
+                            {validationMessage.message}
+                        </p>
+                        <button 
+                            onClick={() => setValidationMessage(null)}
+                            className="w-full py-2.5 rounded-xl font-bold bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 transition"
+                        >
+                            Ho capito
                         </button>
                     </div>
                 </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                <div className="lg:col-span-1 bg-gray-800 rounded-lg p-4 flex flex-col space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label htmlFor="structure-tag" className="text-sm font-medium text-gray-400">Tag Struttura</label>
-                            <input
-                                id="structure-tag"
-                                type="text"
-                                value={localStructure.tag}
-                                onChange={(e) => setLocalStructure({...localStructure, tag: e.target.value})}
-                                className={`mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white font-bold text-lg focus:ring-2 focus:ring-accent focus:border-accent outline-none ${disabledClass}`}
-                                disabled={isReadOnly}
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="structure-multiplier" className="text-sm font-medium text-gray-400">Moltiplicatore</label>
-                            <select
-                                id="structure-multiplier"
-                                value={localStructure.multiplier}
-                                onChange={(e) => setLocalStructure({...localStructure, multiplier: parseInt(e.target.value) as 1 | 5 | 25})}
-                                className={`mt-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 w-full text-white font-bold text-lg focus:ring-2 focus:ring-accent focus:border-accent outline-none ${disabledClass}`}
-                                disabled={isReadOnly}
-                            >
-                                <option value="5">Indice (5€/punto)</option>
-                                <option value="1">CFD (1€/punto)</option>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div className="flex-grow overflow-y-auto pr-2 space-y-3 max-h-[55vh]">
-                        {localStructure.legs.map((leg, index) => {
-                             const theoreticalPrice = calculateTheoreticalPrice(leg);
-                             const tradePriceKey = `${leg.id}-tradePrice`;
-                             const closingPriceKey = `${leg.id}-closingPrice`;
-                             const ivKey = `${leg.id}-impliedVolatility`;
-                             const openCommKey = `${leg.id}-openingCommission`;
-                             const closeCommKey = `${leg.id}-closingCommission`;
-                             
-                             const intrinsicValue = leg.optionType === 'Call' 
-                                ? Math.max(0, marketData.daxSpot - leg.strike) 
-                                : Math.max(0, leg.strike - marketData.daxSpot);
-                             const extrinsicValue = (leg.tradePrice ?? 0) - intrinsicValue;
-
-                             return (
-                             <div key={leg.id} className={`bg-gray-700 p-3 rounded-md space-y-2 ${isReadOnly ? 'opacity-60' : ''}`}>
-                                <div className="flex justify-between items-center">
-                                    <span className="font-bold text-white">Gamba {index + 1}</span>
-                                    {!isReadOnly && (
-                                        <button onClick={() => removeLeg(leg.id)} className="text-gray-400 hover:text-loss p-1 rounded-full">
-                                            <TrashIcon />
-                                        </button>
-                                    )}
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                     <div className="flex rounded-md overflow-hidden h-full">
-                                        <button
-                                            type="button"
-                                            onClick={() => handleLegChange(leg.id, 'optionType', 'Call')}
-                                            className={`w-1/2 py-1 text-sm font-semibold transition ${leg.optionType === 'Call' ? 'bg-accent text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'} ${disabledClass}`}
-                                            disabled={isReadOnly}
-                                        >
-                                            Call
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleLegChange(leg.id, 'optionType', 'Put')}
-                                            className={`w-1/2 py-1 text-sm font-semibold transition ${leg.optionType === 'Put' ? 'bg-warning text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'} ${disabledClass}`}
-                                            disabled={isReadOnly}
-                                        >
-                                            Put
-                                        </button>
-                                    </div>
-                                    <QuantitySelector
-                                        value={leg.quantity}
-                                        onChange={newValue => handleLegChange(leg.id, 'quantity', newValue)}
-                                        disabled={isReadOnly}
-                                        className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`}
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                     <StrikeSelector
-                                        value={leg.strike}
-                                        onChange={newValue => handleLegChange(leg.id, 'strike', newValue)}
-                                        spotPrice={marketData.daxSpot}
-                                        optionType={leg.optionType}
-                                        disabled={isReadOnly}
-                                        className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`}
-                                    />
-                                    <ExpiryDateSelector
-                                        value={leg.expiryDate}
-                                        onChange={newValue => handleLegChange(leg.id, 'expiryDate', newValue)}
-                                        disabled={isReadOnly}
-                                        className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`}
-                                    />
-                                </div>
-                                 <div className="grid grid-cols-2 gap-2">
-                                    <input type="date" placeholder="Data Ap." value={leg.openingDate} onChange={e => handleLegChange(leg.id, 'openingDate', e.target.value)} className={`bg-gray-600 rounded p-1 text-sm w-full text-gray-300 ${disabledClass}`} title="Data di Apertura" disabled={isReadOnly} />
-                                    <input type="date" placeholder="Data Ch." value={leg.closingDate ?? ''} onChange={e => handleLegChange(leg.id, 'closingDate', e.target.value)} className={`bg-gray-600 rounded p-1 text-sm w-full text-gray-300 ${disabledClass}`} title="Data di Chiusura" disabled={isReadOnly || !leg.closingPrice} />
-                                </div>
-                                <div>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <input type="text" placeholder="Prezzo Ap." value={tradePriceKey in localInputValues ? localInputValues[tradePriceKey] : (leg.tradePrice ?? '')} onChange={e => handleNumericInputChange(leg.id, 'tradePrice', e.target.value)} onBlur={() => handleNumericInputBlur(leg.id, 'tradePrice')} className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`} title="Prezzo di Apertura" disabled={isReadOnly}/>
-                                        <input type="text" placeholder="Prezzo Ch." value={closingPriceKey in localInputValues ? localInputValues[closingPriceKey] : (leg.closingPrice ?? '')} onChange={e => handleNumericInputChange(leg.id, 'closingPrice', e.target.value)} onBlur={() => handleNumericInputBlur(leg.id, 'closingPrice')} className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`} title="Prezzo di Chiusura (lasciare vuoto se aperta)" disabled={isReadOnly}/>
-                                    </div>
-                                    <div className="text-xs text-gray-400 mt-1 flex items-center justify-between">
-                                        <div>
-                                            {leg.tradePrice && leg.tradePrice > 0 && (
-                                                <span title="Ripartizione del premio di apertura (Prezzo Ap.) in base allo spot attuale">
-                                                    Intr: <span className="font-mono">{intrinsicValue.toFixed(2)}</span> / Estr: <span className="font-mono">{extrinsicValue.toFixed(2)}</span>
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="flex items-center">
-                                            <span>Teorico: ~{theoreticalPrice.toFixed(2)}</span>
-                                            <button 
-                                                onClick={() => handleLegChange(leg.id, 'tradePrice', parseFloat(theoreticalPrice.toFixed(2)))}
-                                                disabled={isReadOnly}
-                                                className={`ml-2 text-gray-400 hover:text-accent ${disabledClass}`} 
-                                                title="Usa prezzo teorico"
-                                            >
-                                                <CalculatorIcon />
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="text-xs font-medium text-gray-400" htmlFor={`vi-slider-${leg.id}`}>Volatilità Implicita (%)</label>
-                                    <div className="flex items-center space-x-2 mt-1">
-                                        <input
-                                            type="text"
-                                            id={`vi-input-${leg.id}`}
-                                            value={ivKey in localInputValues ? localInputValues[ivKey] : (leg.impliedVolatility ?? '')}
-                                            onChange={e => handleNumericInputChange(leg.id, 'impliedVolatility', e.target.value)}
-                                            onBlur={() => handleNumericInputBlur(leg.id, 'impliedVolatility')}
-                                            className={`bg-gray-600 border-gray-500 rounded p-1 text-sm w-20 text-center ${disabledClass}`}
-                                            disabled={isReadOnly}
-                                        />
-                                        <input
-                                            type="range"
-                                            id={`vi-slider-${leg.id}`}
-                                            min="5"
-                                            max="60"
-                                            step="0.1"
-                                            value={leg.impliedVolatility}
-                                            onChange={e => handleLegChange(leg.id, 'impliedVolatility', parseFloat(e.target.value))}
-                                            className={`w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-accent ${disabledClass}`}
-                                            disabled={isReadOnly}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <input type="text" placeholder="Comm. Ap." value={openCommKey in localInputValues ? localInputValues[openCommKey] : (leg.openingCommission ?? '')} onChange={e => handleNumericInputChange(leg.id, 'openingCommission', e.target.value)} onBlur={() => handleNumericInputBlur(leg.id, 'openingCommission')} className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`} title="Commissione di Apertura (per contratto)" disabled={isReadOnly}/>
-                                    <input type="text" placeholder="Comm. Ch." value={closeCommKey in localInputValues ? localInputValues[closeCommKey] : (leg.closingCommission ?? '')} onChange={e => handleNumericInputChange(leg.id, 'closingCommission', e.target.value)} onBlur={() => handleNumericInputBlur(leg.id, 'closingCommission')} className={`bg-gray-600 rounded p-1 text-sm w-full ${disabledClass}`} title="Commissione di Chiusura (per contratto)" disabled={isReadOnly}/>
-                                </div>
-                            </div>
-                            )
-                        })}
-                    </div>
-                     {isReadOnly ? (
-                         <div className="text-center p-4 bg-gray-700 rounded-md space-y-3">
-                            <p className="font-bold text-white">Struttura Chiusa</p>
-                            <p className="text-sm text-gray-400">Questa struttura non può essere modificata. Riaprila per apportare modifiche.</p>
-                            <button
-                                onClick={handleReopen}
-                                className="w-full bg-accent/80 hover:bg-accent text-white font-bold py-2 rounded-md transition flex items-center justify-center space-x-2"
-                            >
-                                <ReopenIcon />
-                                <span>Riapri per Modificare</span>
-                            </button>
-                         </div>
-                     ) : (
-                        <div className='space-y-2'>
-                            <button onClick={addLeg} className="w-full flex items-center justify-center space-x-2 bg-accent/80 hover:bg-accent text-white font-semibold py-2 rounded-md transition">
-                                <PlusIcon />
-                                <span>Aggiungi Gamba</span>
-                            </button>
-                            <button onClick={handleSave} className="w-full bg-profit/80 hover:bg-profit text-white font-bold py-2 rounded-md transition">
-                                Salva Modifiche
-                            </button>
-                             <div className="flex space-x-2">
-                                <button onClick={handleClose} disabled={!('id' in localStructure)} className={`w-full bg-warning/80 hover:bg-warning text-white font-bold py-2 rounded-md transition flex items-center justify-center ${disabledClass}`}>
-                                    <CheckCircleIcon />
-                                    Chiudi Struttura
-                                </button>
-                                <button onClick={handleDelete} disabled={!('id' in localStructure)} className={`w-full bg-loss/80 hover:bg-loss text-white font-bold py-2 rounded-md transition flex items-center justify-center ${disabledClass}`}>
-                                    <TrashIcon />
-                                    Elimina
-                                </button>
-                            </div>
-                        </div>
-                     )}
-                </div>
-                <div className="lg:col-span-2 bg-gray-800 rounded-lg p-4 flex flex-col space-y-4">
-                    <div className="flex-grow h-[500px]">
-                        <PayoffChart legs={localStructure.legs} marketData={marketData} multiplier={localStructure.multiplier} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="overflow-x-auto">
-                            <h3 className="text-lg font-bold mb-2">Analisi P&L</h3>
-                            <table className="w-full text-sm text-left">
-                                <thead className="text-xs text-gray-400 uppercase bg-gray-700">
-                                    <tr>
-                                        <th className="px-2 py-2">Gamba</th>
-                                        <th className="px-2 py-2 text-right">P&L Punti</th>
-                                        <th className="px-2 py-2 text-right">P&L Lordo</th>
-                                        <th className="px-2 py-2 text-right">Comm.</th>
-                                        <th className="px-2 py-2 text-right">P&L Netto</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="font-mono">
-                                    {calculatedPnl.legPnl.map((pnl, index) => {
-                                        const netPnlClass = pnl.netPnlEuro >= 0 ? 'text-profit' : 'text-loss';
-                                        const grossPnlClass = pnl.grossPnlEuro >= 0 ? 'text-profit' : 'text-loss';
-                                        return (
-                                            <tr key={pnl.id} className={`border-b border-gray-700 hover:bg-gray-700/50 ${pnl.isClosed ? 'opacity-60' : ''}`}>
-                                                <td className="px-2 py-1 font-sans font-medium text-white">#{index + 1} {pnl.isClosed ? '(Chiusa)' : ''}</td>
-                                                <td className={`px-2 py-1 text-right ${pnl.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{pnl.pnlPoints.toFixed(2)}</td>
-                                                <td className={`px-2 py-1 text-right ${grossPnlClass}`}>€{pnl.grossPnlEuro.toFixed(2)}</td>
-                                                <td className="px-2 py-1 text-right text-warning">-€{pnl.commissionCost.toFixed(2)}</td>
-                                                <td className={`px-2 py-1 text-right font-bold ${netPnlClass}`}>€{pnl.netPnlEuro.toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                                <tfoot className="font-mono font-bold text-white">
-                                    <tr className="bg-gray-700/50">
-                                        <td className="px-2 py-1 font-sans text-white" colSpan={2}>Realizzato</td>
-                                        <td className={`px-2 py-1 text-right ${calculatedPnl.totalRealizedGross >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                            €{calculatedPnl.totalRealizedGross.toFixed(2)}
-                                        </td>
-                                        <td className="px-2 py-1 text-right text-warning">
-                                            -€{calculatedPnl.totalRealizedCommission.toFixed(2)}
-                                        </td>
-                                        <td className={`px-2 py-1 text-right ${calculatedPnl.totalRealizedNet >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                            €{calculatedPnl.totalRealizedNet.toFixed(2)}
-                                        </td>
-                                    </tr>
-                                     <tr className="bg-gray-700/50">
-                                        <td className="px-2 py-1 font-sans text-white" colSpan={2}>Non Realizzato</td>
-                                        <td className={`px-2 py-1 text-right ${calculatedPnl.totalUnrealizedGross >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                            €{calculatedPnl.totalUnrealizedGross.toFixed(2)}
-                                        </td>
-                                        <td className="px-2 py-1 text-right text-warning">
-                                            -€{calculatedPnl.totalUnrealizedCommission.toFixed(2)}
-                                        </td>
-                                        <td className={`px-2 py-1 text-right ${calculatedPnl.totalUnrealizedNet >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                            €{calculatedPnl.totalUnrealizedNet.toFixed(2)}
-                                        </td>
-                                    </tr>
-                                    <tr className="bg-gray-900">
-                                        <td className="px-2 py-2 font-sans text-white" colSpan={2}>TOTALE</td>
-                                        <td className={`px-2 py-2 text-right text-lg ${calculatedPnl.grandTotalGross >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                            €{calculatedPnl.grandTotalGross.toFixed(2)}
-                                        </td>
-                                        <td className="px-2 py-2 text-right text-lg text-warning">
-                                            -€{calculatedPnl.grandTotalCommission.toFixed(2)}
-                                        </td>
-                                        <td className={`px-2 py-2 text-right text-lg ${calculatedPnl.grandTotalNet >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                            €{calculatedPnl.grandTotalNet.toFixed(2)}
-                                        </td>
-                                    </tr>
-                                </tfoot>
-                            </table>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <h3 className="text-lg font-bold mb-2">Analisi Greche (Gambe Aperte)</h3>
-                            <table className="w-full text-sm text-left">
-                                <thead className="text-xs text-gray-400 uppercase bg-gray-700">
-                                    <tr>
-                                        <th className="px-4 py-2">Gamba</th>
-                                        <th className="px-4 py-2 text-right">Delta</th>
-                                        <th className="px-4 py-2 text-right">Gamma</th>
-                                        <th className="px-4 py-2 text-right">Theta</th>
-                                        <th className="px-4 py-2 text-right">Vega</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="font-mono">
-                                    {localStructure.legs.filter(l => l.closingPrice === null || l.closingPrice === undefined).map((leg) => {
-                                        const greeks = calculatedGreeks.legGreeks.find(g => g.id === leg.id);
-                                        return (
-                                            <tr key={leg.id} className="border-b border-gray-700 hover:bg-gray-700/50">
-                                                <td className="px-4 py-1 font-sans font-medium text-white">#{leg.id} {leg.quantity > 0 ? 'L' : 'S'} {leg.optionType.slice(0,1)} @{leg.strike}</td>
-                                                <td className="px-4 py-1 text-right text-white">{greeks?.delta.toFixed(2)}</td>
-                                                <td className="px-4 py-1 text-right text-white">{greeks?.gamma.toFixed(3)}</td>
-                                                <td className="px-4 py-1 text-right text-white">€{((greeks?.theta ?? 0) * localStructure.multiplier).toFixed(2)}</td>
-                                                <td className="px-4 py-1 text-right text-white">€{((greeks?.vega ?? 0) * localStructure.multiplier).toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                                <tfoot className="font-mono font-bold text-white">
-                                    <tr className="bg-gray-700">
-                                        <td className="px-4 py-2 font-sans text-white">TOTALI</td>
-                                        <td className="px-4 py-2 text-right text-white">{calculatedGreeks.totalGreeks.delta.toFixed(2)}</td>
-                                        <td className="px-4 py-2 text-right text-white">{calculatedGreeks.totalGreeks.gamma.toFixed(3)}</td>
-                                        <td className="px-4 py-2 text-right text-white">€{(calculatedGreeks.totalGreeks.theta * localStructure.multiplier).toFixed(2)}</td>
-                                        <td className="px-4 py-2 text-right text-white">€{(calculatedGreeks.totalGreeks.vega * localStructure.multiplier).toFixed(2)}</td>
-                                    </tr>
-                                </tfoot>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            )}
         </div>
     );
 };

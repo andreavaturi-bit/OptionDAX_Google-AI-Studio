@@ -1,5 +1,5 @@
 {
   "name": "Option DAX",
-  "description": "Un'applicazione web professionale per la gestione, l'analisi e il monitoraggio di strategie complesse di trading in opzioni sull'indice DAX. Offre calcoli Black-Scholes in tempo reale, visualizzazioni di payoff avanzate, analisi del rischio di portafoglio e un chatbot potenziato da IA per ottenere approfondimenti.",
+  "description": "Un'applicazione web professionale per la gestione, l'analisi e il monitoraggio di strategie complesse di trading in opzioni sull'indice DAX. Offre calcoli Black-Scholes in tempo reale, visualizzazioni di payoff avanzate e analisi del rischio di portafoglio.",
   "requestFramePermissions": []
 }

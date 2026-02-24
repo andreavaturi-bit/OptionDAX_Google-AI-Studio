@@ -1,31 +1,51 @@
+export interface UserProfile {
+    id: string;
+    email: string;
+    role: 'admin' | 'client';
+    created_at?: string;
+}
+
+export interface SharedStructure {
+    id: string;
+    structureId: string;
+    clientId: string;
+    createdAt: string;
+}
+
 export interface OptionLeg {
-  id: number;
+  id: string; // Changed to string for UUID
   optionType: 'Call' | 'Put';
   strike: number;
   expiryDate: string; 
-  quantity: number; // Positive for long, negative for short
+  quantity: number;
   tradePrice: number;
-  openingDate: string; // YYYY-MM-DD
-  closingPrice?: number | null; // Price at which the leg was closed
-  closingDate?: string | null; // YYYY-MM-DD
-  impliedVolatility: number; // as percentage, e.g., 18.5
+  openingDate: string;
+  closingPrice?: number | null;
+  closingDate?: string | null;
+  impliedVolatility: number;
   openingCommission?: number;
   closingCommission?: number;
+  enabled?: boolean;
+  currentPrice?: number; // Real-time theoretical price
+  currentIv?: number; // Real-time IV
 }
 
 export interface MarketData {
     daxSpot: number;
-    riskFreeRate: number; // as percentage, e.g., 2.61
+    daxVolatility: number; // VDAX-NEW or similar
+    riskFreeRate: number;
+    lastUpdate: number;
 }
 
 export interface Structure {
-    id: number;
+    id: string; // Changed to string for UUID
     tag: string;
     legs: OptionLeg[];
     status: 'Active' | 'Closed';
-    multiplier: 1 | 5 | 25; // Product multiplier (e.g., 1=CFD, 5=Micro Future, 25=Future)
+    multiplier: 1 | 5 | 25;
     closingDate?: string;
     realizedPnl?: number;
+    createdAt?: string; // ISO string
 }
 
 export interface CalculatedGreeks {
@@ -33,23 +53,6 @@ export interface CalculatedGreeks {
     gamma: number;
     theta: number;
     vega: number;
-}
-
-export interface ExtractedTrade {
-    description: string;
-    optionType: 'Call' | 'Put';
-    strike: number;
-    expiryDate: string; // YYYY-MM-DD
-    tradeType: 'Buy' | 'Sell';
-    quantity: number;
-    price: number;
-}
-
-export interface HistoricalImportData {
-    tag: string;
-    legs: (Omit<OptionLeg, 'id' | 'impliedVolatility' | 'closingDate' | 'closingPrice' | 'openingCommission' | 'closingCommission'> & { closingPrice: number })[];
-    realizedPnl: number;
-    closingDate: string; // YYYY-MM-DD
 }
 
 export interface Settings {

@@ -1,4 +1,3 @@
-
 import React, { useMemo, CSSProperties, useState, useRef, useEffect } from 'react';
 
 interface StrikeSelectorProps {
@@ -12,12 +11,12 @@ interface StrikeSelectorProps {
 
 const ChevronDownIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 11-1.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
     </svg>
 );
 
 
-const getStrikeStyle = (strike: number, spotPrice: number, optionType: 'Call' | 'Put'): CSSProperties => {
+const getStrikeStyle = (strike: number, spotPrice: number, optionType: 'Call' | 'Put', isDarkMode: boolean): CSSProperties => {
     const moneyness = strike - spotPrice;
     const colorRange = 500; 
 
@@ -25,20 +24,20 @@ const getStrikeStyle = (strike: number, spotPrice: number, optionType: 'Call' | 
     let baseColor = '';
 
     if (optionType === 'Call') {
-        baseColor = '59, 130, 246'; // Blu (accent)
-        if (moneyness <= 0) { // ITM or ATM for a Call
+        baseColor = '59, 130, 246'; // Blu
+        if (moneyness <= 0) {
             const normalizedMoneyness = Math.min(1, -moneyness / colorRange);
             intensity = 0.2 + normalizedMoneyness * 0.8;
         }
-    } else { // Put
-        baseColor = '245, 158, 11'; // Arancione (warning)
-        if (moneyness >= 0) { // ITM or ATM for a Put
+    } else {
+        baseColor = '245, 158, 11'; // Arancione
+        if (moneyness >= 0) {
             const normalizedMoneyness = Math.min(1, moneyness / colorRange);
             intensity = 0.2 + normalizedMoneyness * 0.8;
         }
     }
     
-    const alpha = intensity * 0.6; 
+    const alpha = isDarkMode ? intensity * 0.6 : intensity * 0.3; 
 
     return {
         backgroundColor: `rgba(${baseColor}, ${alpha})`,
@@ -47,12 +46,15 @@ const getStrikeStyle = (strike: number, spotPrice: number, optionType: 'Call' | 
 
 const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPrice, optionType, disabled, className }) => {
     const [isOpen, setIsOpen] = useState(false);
+    const [isDarkMode, setIsDarkMode] = useState(false);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLUListElement>(null);
     const [inputValue, setInputValue] = useState(value.toString());
 
     useEffect(() => {
         setInputValue(value.toString());
+        const checkTheme = () => setIsDarkMode(document.documentElement.classList.contains('dark'));
+        checkTheme();
     }, [value]);
 
     const strikeOptions = useMemo(() => {
@@ -73,26 +75,21 @@ const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPr
         return options;
     }, [spotPrice, value]);
     
-    // Improved scrolling logic to center the selected option
     useEffect(() => {
         if (isOpen && listRef.current) {
-            // Slight delay to ensure the DOM is fully rendered and layout is calculated
             const timer = setTimeout(() => {
                 const list = listRef.current;
                 if (!list) return;
 
-                // Find the element with the matching data-strike attribute
                 const selectedOption = list.querySelector(`[data-strike="${value}"]`) as HTMLElement;
                 
                 if (selectedOption) {
-                    // Calculate scroll position to center the element
                     const listHeight = list.clientHeight;
                     const optionTop = selectedOption.offsetTop;
                     const optionHeight = selectedOption.clientHeight;
-                    
                     list.scrollTop = optionTop - listHeight / 2 + optionHeight / 2;
                 }
-            }, 10); // Increased from 0 to 10ms to be more reliable
+            }, 10);
             return () => clearTimeout(timer);
         }
     }, [isOpen, value]);
@@ -130,14 +127,14 @@ const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPr
                     value={inputValue}
                     onChange={handleInputChange}
                     onFocus={() => !disabled && setIsOpen(true)}
-                    className="w-full bg-transparent outline-none text-white px-2 appearance-none"
+                    className="w-full bg-transparent outline-none text-slate-900 dark:text-white px-2 appearance-none"
                     disabled={disabled}
                 />
                  <button
                     type="button"
                     onClick={() => !disabled && setIsOpen(!isOpen)}
                     disabled={disabled}
-                    className="px-2 h-full flex items-center justify-center text-gray-400 hover:text-white border-l border-gray-500/30"
+                    className="px-2 h-full flex items-center justify-center text-slate-400 dark:text-gray-400 hover:text-slate-600 dark:hover:text-white border-l border-slate-200 dark:border-gray-500/30"
                     tabIndex={-1}
                 >
                     <ChevronDownIcon />
@@ -147,15 +144,15 @@ const StrikeSelector: React.FC<StrikeSelectorProps> = ({ value, onChange, spotPr
             {isOpen && (
                 <ul
                     ref={listRef}
-                    className="absolute z-50 mt-1 w-full bg-gray-600 border border-gray-500 rounded-md shadow-lg max-h-60 overflow-y-auto left-0"
+                    className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-600 rounded-md shadow-xl max-h-60 overflow-y-auto left-0"
                     role="listbox"
                 >
                     {strikeOptions.map(strike => (
                         <li
                             key={strike}
-                            data-strike={strike} // Added for querySelector
-                            style={getStrikeStyle(strike, spotPrice, optionType)}
-                            className={`px-3 py-2 cursor-pointer hover:bg-accent/50 ${value === strike ? 'bg-accent/70' : ''}`}
+                            data-strike={strike}
+                            style={getStrikeStyle(strike, spotPrice, optionType, isDarkMode)}
+                            className={`px-3 py-2 cursor-pointer hover:bg-accent/20 dark:hover:bg-accent/50 text-slate-700 dark:text-white text-sm ${value === strike ? 'bg-accent/40 dark:bg-accent/70 font-bold' : ''}`}
                             onClick={() => handleSelect(strike)}
                             role="option"
                             aria-selected={value === strike}
