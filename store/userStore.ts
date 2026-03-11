@@ -18,16 +18,21 @@ const useUserStore = create<UserState>((set) => ({
   error: null,
 
   fetchAllProfiles: async () => {
-    const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-    
-    if (error) {
-        console.error("Error fetching all profiles:", error);
+    try {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .order('email', { ascending: true });
+        
+        if (error) {
+            console.error("[UserStore] Error fetching all profiles:", error);
+            return [];
+        }
+        return (data || []) as UserProfile[];
+    } catch (err) {
+        console.error("[UserStore] Unexpected error fetching profiles:", err);
         return [];
     }
-    return data as UserProfile[];
   },
 
   fetchProfile: async () => {

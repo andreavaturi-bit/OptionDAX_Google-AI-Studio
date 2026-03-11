@@ -8,6 +8,8 @@ import StructureDetailView from './components/StructureDetailView';
 import SettingsView from './components/SettingsView';
 import PortfolioAnalysis from './components/PortfolioAnalysis';
 import AdminDashboard from './components/AdminDashboard';
+import SharedStrategiesView from './components/SharedStrategiesView';
+import OptionsCalculator from './components/OptionsCalculator';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import AuthView from './components/AuthView';
@@ -80,6 +82,10 @@ const App: React.FC = () => {
                 return <PortfolioAnalysis />;
             case 'admin':
                 return <AdminDashboard />;
+            case 'shared':
+                return <SharedStrategiesView />;
+            case 'calculator':
+                return <OptionsCalculator />;
             default:
                 return <StructureListView />;
         }

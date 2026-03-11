@@ -5,13 +5,6 @@ export interface UserProfile {
     created_at?: string;
 }
 
-export interface SharedStructure {
-    id: string;
-    structureId: string;
-    clientId: string;
-    createdAt: string;
-}
-
 export interface OptionLeg {
   id: string; // Changed to string for UUID
   optionType: 'Call' | 'Put';
@@ -28,6 +21,7 @@ export interface OptionLeg {
   enabled?: boolean;
   currentPrice?: number; // Real-time theoretical price
   currentIv?: number; // Real-time IV
+  manualCurrentPrice?: number | null; // User override for current price
 }
 
 export interface MarketData {
@@ -35,6 +29,7 @@ export interface MarketData {
     daxVolatility: number; // VDAX-NEW or similar
     riskFreeRate: number;
     lastUpdate: number;
+    isVolatilityFallback?: boolean;
 }
 
 export interface Structure {
@@ -46,6 +41,7 @@ export interface Structure {
     closingDate?: string;
     realizedPnl?: number;
     createdAt?: string; // ISO string
+    isShared?: boolean; // New field for global sharing
 }
 
 export interface CalculatedGreeks {

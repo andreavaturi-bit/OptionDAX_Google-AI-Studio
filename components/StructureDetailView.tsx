@@ -1,5 +1,22 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { OptionLeg, MarketData, Structure, CalculatedGreeks } from '../types';
 import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
 import usePortfolioStore from '../store/portfolioStore';
@@ -9,6 +26,14 @@ import { PlusIcon, TrashIcon, CloudDownloadIcon, CalculatorIcon, ArchiveIcon } f
 import ExpiryDateSelector, { findThirdFridayOfMonth } from './ExpiryDateSelector';
 import QuantitySelector from './QuantitySelector';
 import StrikeSelector from './StrikeSelector';
+
+import useUserStore from '../store/userStore';
+
+const DragHandleIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400 cursor-grab active:cursor-grabbing" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+    </svg>
+);
 
 const ReopenIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -22,6 +47,126 @@ const MagicWandIcon = () => (
     </svg>
 );
 
+const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, labelClass, handleLegChange, setFairValueAsTradePrice, removeLeg }: any) => {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+        isDragging,
+    } = useSortable({ id: leg.id });
+
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 10 : 1,
+        position: 'relative' as const,
+    };
+
+    return (
+        <div ref={setNodeRef} style={style} className={`p-4 rounded-xl border bg-white dark:bg-gray-800 border-slate-200 dark:border-gray-600 shadow-sm relative group ${isDragging ? 'shadow-lg ring-2 ring-accent opacity-90' : ''}`}>
+            <div className="flex justify-between items-center mb-3">
+                <div className="flex items-center space-x-2">
+                    {!isReadOnly && (
+                        <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 -ml-2">
+                            <DragHandleIcon />
+                        </div>
+                    )}
+                    <input 
+                        type="checkbox" 
+                        checked={leg.enabled !== false} 
+                        onChange={(e) => handleLegChange(leg.id, 'enabled', e.target.checked)}
+                        className="w-4 h-4 text-accent rounded focus:ring-accent cursor-pointer"
+                        disabled={isReadOnly}
+                        title={leg.enabled !== false ? "Disabilita Gamba" : "Abilita Gamba"}
+                    />
+                    <span className={`text-xs font-bold uppercase tracking-widest ${leg.enabled !== false ? 'text-slate-500' : 'text-slate-300 dark:text-gray-600'}`}>Gamba {idx + 1}</span>
+                </div>
+                {!isReadOnly && (
+                    <button onClick={() => removeLeg(leg.id)} className="text-loss opacity-0 group-hover:opacity-100 transition-opacity p-1"><TrashIcon /></button>
+                )}
+            </div>
+
+            {/* Row 1: Basic Info */}
+            <div className={`grid grid-cols-2 md:grid-cols-10 gap-2 mb-3 ${leg.enabled === false ? 'opacity-50 pointer-events-none' : ''}`}>
+                <div className="col-span-2 md:col-span-3 flex rounded overflow-hidden border border-slate-200 dark:border-gray-600 h-[30px]">
+                    <button onClick={() => handleLegChange(leg.id, 'optionType', 'Call')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Call' ? 'bg-accent text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Call</button>
+                    <button onClick={() => handleLegChange(leg.id, 'optionType', 'Put')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Put' ? 'bg-warning text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Put</button>
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                    <QuantitySelector value={leg.quantity} onChange={v => handleLegChange(leg.id, 'quantity', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                    <StrikeSelector value={leg.strike} onChange={v => handleLegChange(leg.id, 'strike', v)} spotPrice={simulatedSpot} optionType={leg.optionType} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                </div>
+                <div className="col-span-2 md:col-span-3">
+                    <ExpiryDateSelector value={leg.expiryDate} onChange={v => handleLegChange(leg.id, 'expiryDate', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                </div>
+            </div>
+
+            {/* Row 2: Advanced Inputs grouped */}
+            <div className="bg-slate-50 dark:bg-gray-900/50 p-4 rounded-xl border border-slate-100 dark:border-gray-700 space-y-6">
+                <div className="flex flex-col md:flex-row gap-8">
+                    {/* Apertura */}
+                    <div className="flex-1 space-y-4">
+                        <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Apertura</span>
+                            {!isReadOnly && (
+                                <button onClick={() => setFairValueAsTradePrice(leg.id)} title="Imposta Fair Value" className="text-accent hover:scale-110 transition-transform active:scale-95">
+                                    <MagicWandIcon />
+                                </button>
+                            )}
+                        </div>
+                        <div className="space-y-3">
+                            <div>
+                                <label className={labelClass}>Prezzo Apertura</label>
+                                <input type="number" step="0.01" value={leg.tradePrice} onChange={e => handleLegChange(leg.id, 'tradePrice', parseFloat(e.target.value))} className={`${inputBaseClass} font-mono border-accent/20`} disabled={isReadOnly} />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="min-w-0">
+                                    <label className={`${labelClass} truncate`}>Data Apertura</label>
+                                    <input type="date" value={leg.openingDate} onChange={e => handleLegChange(leg.id, 'openingDate', e.target.value)} className={inputBaseClass} disabled={isReadOnly} />
+                                </div>
+                                <div className="min-w-0">
+                                    <label className={`${labelClass} truncate`}>Comm. Ape.</label>
+                                    <input type="number" step="0.01" value={leg.openingCommission || 0} onChange={e => handleLegChange(leg.id, 'openingCommission', parseFloat(e.target.value) || 0)} className={`${inputBaseClass} font-mono text-center`} disabled={isReadOnly} />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Vertical Divider */}
+                    <div className="hidden md:block w-px bg-slate-200 dark:bg-gray-700 self-stretch"></div>
+
+                    {/* Chiusura */}
+                    <div className="flex-1 space-y-4">
+                        <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Chiusura</span>
+                        </div>
+                        <div className="space-y-3">
+                            <div>
+                                <label className={labelClass}>Prezzo Chiusura</label>
+                                <input type="number" step="0.01" placeholder="-" value={leg.closingPrice || ''} onChange={e => handleLegChange(leg.id, 'closingPrice', e.target.value === '' ? null : parseFloat(e.target.value))} className={`${inputBaseClass} font-mono`} disabled={isReadOnly} />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="min-w-0">
+                                    <label className={`${labelClass} truncate`}>Data Chiusura</label>
+                                    <input type="date" value={leg.closingDate || ''} onChange={e => handleLegChange(leg.id, 'closingDate', e.target.value)} className={inputBaseClass} disabled={isReadOnly} />
+                                </div>
+                                <div className="min-w-0">
+                                    <label className={`${labelClass} truncate`}>Comm. Chi.</label>
+                                    <input type="number" step="0.01" value={leg.closingCommission || 0} onChange={e => handleLegChange(leg.id, 'closingCommission', parseFloat(e.target.value) || 0)} className={`${inputBaseClass} font-mono text-center`} disabled={isReadOnly} />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 interface StructureDetailViewProps {
     structureId: string | 'new' | null;
 }
@@ -29,6 +174,7 @@ interface StructureDetailViewProps {
 const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }) => {
     const { structures, marketData, setMarketData, addStructure, updateStructure, deleteStructure, closeStructure, reopenStructure, setCurrentView, refreshDaxSpot, isLoadingSpot } = usePortfolioStore();
     const { settings } = useSettingsStore();
+    const { profile } = useUserStore();
     const [localStructure, setLocalStructure] = useState<Omit<Structure, 'id' | 'status'> | Structure | null>(null);
     const [isReadOnly, setIsReadOnly] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -64,6 +210,42 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
     // Stati per la conferma in due step
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [confirmClose, setConfirmClose] = useState(false);
+
+    const sensors = useSensors(
+        useSensor(PointerSensor),
+        useSensor(KeyboardSensor, {
+            coordinateGetter: sortableKeyboardCoordinates,
+        })
+    );
+
+    const handleDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+
+        if (over && active.id !== over.id) {
+            setLocalStructure((prev) => {
+                if (!prev) return prev;
+                const oldIndex = prev.legs.findIndex((leg) => leg.id === active.id);
+                const newIndex = prev.legs.findIndex((leg) => leg.id === over.id);
+                return {
+                    ...prev,
+                    legs: arrayMove(prev.legs, oldIndex, newIndex),
+                };
+            });
+        }
+    };
+
+    const sortLegsByDate = () => {
+        if (!localStructure || isReadOnly) return;
+        setLocalStructure(prev => {
+            if (!prev) return prev;
+            const sortedLegs = [...prev.legs].sort((a, b) => {
+                const dateA = new Date(a.openingDate).getTime();
+                const dateB = new Date(b.openingDate).getTime();
+                return dateA - dateB;
+            });
+            return { ...prev, legs: sortedLegs };
+        });
+    };
 
     useEffect(() => {
         if (structureId === 'new') {
@@ -144,7 +326,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             openingDate: new Date().toISOString().split('T')[0],
             quantity: 1,
             tradePrice: 0,
-            impliedVolatility: 15,
+            impliedVolatility: marketData.daxVolatility || 15,
         };
         const initialFairValue = calculateLegFairValue(tempLeg);
 
@@ -158,7 +340,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             tradePrice: initialFairValue, // Default al Fair Value
             closingPrice: null,
             closingDate: null,
-            impliedVolatility: 15,
+            impliedVolatility: marketData.daxVolatility || 15,
             openingCommission: settings.defaultOpeningCommission,
             closingCommission: settings.defaultClosingCommission,
             enabled: true,
@@ -280,8 +462,9 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             
             const timeToExpiry = getTimeToExpiry(leg.expiryDate);
             
-            // Use Live IV if in Live Mode, otherwise use Trade IV (or simulated IV if we had that control)
-            const volatilityToUse = isLiveMode && storeLeg?.currentIv ? storeLeg.currentIv : leg.impliedVolatility;
+            // Use Live IV if in Live Mode, otherwise use Trade IV
+            // We use marketData.daxVolatility directly to ensure consistency with List View and responsiveness
+            const volatilityToUse = isLiveMode && marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
             
             const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
             const fairValue = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
@@ -289,7 +472,13 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             
             // Check if specifically this leg is closed (has closing price)
             const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0;
-            const currentPrice = isLegClosed ? Number(leg.closingPrice) : fairValue;
+            
+            let currentPrice = fairValue;
+            if (isLegClosed) {
+                currentPrice = Number(leg.closingPrice);
+            } else if (leg.manualCurrentPrice !== null && leg.manualCurrentPrice !== undefined) {
+                currentPrice = leg.manualCurrentPrice;
+            }
             
             // P&L calculation: (Exit - Entry) * Qty. 
             // If Long (Qty > 0): (Current - Trade) * Qty.
@@ -344,6 +533,36 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             return acc;
         }, { pnl: 0, pnlPoints: 0, gross: 0, comm: 0, delta: 0, gamma: 0, theta: 0, vega: 0, thetaPoints: 0, vegaPoints: 0 });
 
+        // Calculate Global PDC (Net Entry Price in Points)
+        // Formula: (Total Net Cash Flow / Multiplier)
+        // Includes ALL legs (open and closed) and ALL commissions.
+        const totalNetCashFlow = localStructure.legs.reduce((acc, leg) => {
+            if (leg.enabled === false) return acc;
+
+            // Opening Flow:
+            // Long (Qty > 0): Pays money -> Negative Flow
+            // Short (Qty < 0): Receives money -> Positive Flow
+            // Math: -1 * Qty * Price * Multiplier
+            const openingFlow = -1 * leg.quantity * leg.tradePrice * localStructure.multiplier;
+            const openingComm = leg.openingCommission || 0;
+            
+            let legFlow = openingFlow - openingComm;
+
+            // Closing Flow (if closed):
+            // Long (Qty > 0): Sells -> Receives money -> Positive Flow
+            // Short (Qty < 0): Buys -> Pays money -> Negative Flow
+            // Math: +1 * Qty * Price * Multiplier
+            if (leg.closingPrice !== null && leg.closingPrice !== undefined) {
+                const closingFlow = leg.quantity * leg.closingPrice * localStructure.multiplier;
+                const closingComm = leg.closingCommission || 0;
+                legFlow += (closingFlow - closingComm);
+            }
+
+            return acc + legFlow;
+        }, 0);
+
+        const globalPDC = totalNetCashFlow / localStructure.multiplier;
+
         const realizedPnl = legAnalysis.filter(l => {
             const leg = localStructure.legs.find(sl => sl.id === l.id);
             return l.isClosed && leg?.enabled !== false;
@@ -364,7 +583,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             return !l.isClosed && leg?.enabled !== false;
         }).reduce((acc, l) => acc + l.pnlPoints, 0);
 
-        return { legAnalysis, totals, realizedPnl, realizedPoints, unrealizedPnl, unrealizedPoints };
+        return { legAnalysis, totals, realizedPnl, realizedPoints, unrealizedPnl, unrealizedPoints, globalPDC };
     }, [localStructure, simulatedSpot, marketData.riskFreeRate, isLiveMode, structures, marketData.daxVolatility]); // Use simulatedSpot
 
     if (!localStructure) return null;
@@ -372,43 +591,50 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
     const inputBaseClass = "bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded px-2 py-1.5 text-xs w-full outline-none focus:ring-1 focus:ring-accent disabled:opacity-60";
     const labelClass = "text-[9px] font-bold text-slate-400 uppercase block mb-1 tracking-wider";
 
+    const isMarketDataValid = marketData.daxSpot > 0 && marketData.daxVolatility > 0;
+
     return (
         <div className="space-y-6 max-w-[1600px] mx-auto pb-12">
             {/* Header */}
-            <div className="flex flex-wrap gap-4 justify-between items-center">
-                <div className="flex items-center space-x-4">
+            <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+                <div className="flex items-center space-x-2 md:space-x-4">
                     <button onClick={() => setCurrentView('list')} className="p-2 hover:bg-slate-200 dark:hover:bg-gray-700 rounded-full transition-colors">&larr;</button>
-                    <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+                    <h1 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white truncate max-w-[200px] md:max-w-none">
                         {structureId === 'new' ? 'Nuova Strategia' : localStructure.tag}
                     </h1>
                 </div>
                 
-                <div className="flex items-center space-x-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-slate-200 dark:border-gray-700 shadow-sm">
+                <div className="flex items-center space-x-2 md:space-x-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-slate-200 dark:border-gray-700 shadow-sm w-full md:w-auto overflow-x-auto">
                     <button 
                         onClick={() => isLiveMode ? setIsLiveMode(false) : resetToLive()}
-                        className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${isLiveMode ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-200 text-slate-500'}`}
+                        className={`flex-shrink-0 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                            isLiveMode 
+                                ? (isMarketDataValid ? 'bg-green-500 text-white' : 'bg-red-500 text-white animate-pulse') 
+                                : 'bg-slate-200 text-slate-500'
+                        }`}
+                        title={isLiveMode && !isMarketDataValid ? "Dati di mercato incompleti o non aggiornati" : ""}
                     >
                         {isLiveMode ? 'LIVE' : 'SIM'}
                     </button>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-2">Spot</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 md:pl-2 flex-shrink-0">Spot</span>
                     <input 
                         type="number" 
                         value={simulatedSpot} 
                         onChange={e => handleSpotChange(parseFloat(e.target.value) || 0)} 
-                        className={`bg-transparent w-24 text-center font-mono font-bold outline-none ${isLiveMode ? 'text-slate-400' : 'text-accent'}`}
+                        className={`bg-transparent w-20 md:w-24 text-center font-mono font-bold outline-none flex-shrink-0 ${isLiveMode ? 'text-slate-400' : 'text-accent'}`}
                         readOnly={isLiveMode}
                     />
                     
                     {/* Divider */}
-                    <div className="w-px h-4 bg-slate-200 dark:bg-gray-700 mx-2"></div>
+                    <div className="w-px h-4 bg-slate-200 dark:bg-gray-700 mx-1 md:mx-2 flex-shrink-0"></div>
 
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">VDAX</span>
-                    <span className={`font-mono font-bold text-sm ${isLiveMode ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400'}`}>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex-shrink-0">VDAX</span>
+                    <span className={`font-mono font-bold text-xs md:text-sm flex-shrink-0 ${isLiveMode ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400'}`}>
                         {marketData.daxVolatility ? marketData.daxVolatility.toFixed(1) : '-'}%
                     </span>
 
                     {!isLiveMode && (
-                        <button onClick={handleRefreshSpot} disabled={isLoadingSpot} className={`p-2 rounded hover:bg-slate-100 dark:hover:bg-gray-700 text-accent ${isLoadingSpot ? 'animate-spin' : ''}`}>
+                        <button onClick={handleRefreshSpot} disabled={isLoadingSpot} className={`p-2 rounded hover:bg-slate-100 dark:hover:bg-gray-700 text-accent flex-shrink-0 ${isLoadingSpot ? 'animate-spin' : ''}`}>
                             <CloudDownloadIcon />
                         </button>
                     )}
@@ -434,133 +660,59 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                 </select>
                             </div>
                         </div>
+                        
+                        {/* Admin Sharing Toggle */}
+                        {!isReadOnly && profile?.role === 'admin' && (
+                            <div className="flex items-center space-x-2 pt-2 border-t border-slate-100 dark:border-gray-700">
+                                <input 
+                                    type="checkbox" 
+                                    id="isShared"
+                                    checked={localStructure.isShared || false} 
+                                    onChange={e => setLocalStructure({...localStructure, isShared: e.target.checked})}
+                                    className="w-4 h-4 text-accent rounded focus:ring-accent cursor-pointer"
+                                />
+                                <label htmlFor="isShared" className="text-xs font-medium text-slate-700 dark:text-gray-300 cursor-pointer select-none">
+                                    Condividi con tutti i clienti
+                                </label>
+                            </div>
+                        )}
 
-                        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                            {localStructure.legs.map((leg, idx) => (
-                                <div key={leg.id} className="p-4 rounded-xl border bg-white dark:bg-gray-800 border-slate-200 dark:border-gray-600 shadow-sm relative group">
-                                    <div className="flex justify-between items-center mb-3">
-                                        <div className="flex items-center space-x-2">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={leg.enabled !== false} 
-                                                onChange={(e) => handleLegChange(leg.id, 'enabled', e.target.checked)}
-                                                className="w-4 h-4 text-accent rounded focus:ring-accent cursor-pointer"
-                                                disabled={isReadOnly}
-                                                title={leg.enabled !== false ? "Disabilita Gamba" : "Abilita Gamba"}
-                                            />
-                                            <span className={`text-xs font-bold uppercase tracking-widest ${leg.enabled !== false ? 'text-slate-500' : 'text-slate-300 dark:text-gray-600'}`}>Gamba {idx + 1}</span>
-                                        </div>
-                                        {!isReadOnly && (
-                                            <button onClick={() => setLocalStructure({...localStructure, legs: localStructure.legs.filter(l => l.id !== leg.id)})} className="text-loss opacity-0 group-hover:opacity-100 transition-opacity p-1"><TrashIcon /></button>
-                                        )}
-                                    </div>
-
-                                    {/* Row 1: Basic Info */}
-                                    <div className={`grid grid-cols-10 gap-2 mb-3 ${leg.enabled === false ? 'opacity-50 pointer-events-none' : ''}`}>
-                                        <div className="col-span-3 flex rounded overflow-hidden border border-slate-200 dark:border-gray-600 h-[30px]">
-                                            <button onClick={() => handleLegChange(leg.id, 'optionType', 'Call')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Call' ? 'bg-accent text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Call</button>
-                                            <button onClick={() => handleLegChange(leg.id, 'optionType', 'Put')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Put' ? 'bg-warning text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Put</button>
-                                        </div>
-                                        <div className="col-span-2">
-                                            <QuantitySelector value={leg.quantity} onChange={v => handleLegChange(leg.id, 'quantity', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
-                                        </div>
-                                        <div className="col-span-2">
-                                            <StrikeSelector value={leg.strike} onChange={v => handleLegChange(leg.id, 'strike', v)} spotPrice={simulatedSpot} optionType={leg.optionType} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
-                                        </div>
-                                        <div className="col-span-3">
-                                            <ExpiryDateSelector value={leg.expiryDate} onChange={v => handleLegChange(leg.id, 'expiryDate', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
-                                        </div>
-                                    </div>
-
-                                    {/* Row 2: Advanced Inputs grouped */}
-                                    <div className="bg-slate-50 dark:bg-gray-900/50 p-4 rounded-xl border border-slate-100 dark:border-gray-700 space-y-6">
-                                        <div className="flex flex-col md:flex-row gap-8">
-                                            {/* Apertura */}
-                                            <div className="flex-1 space-y-4">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-[10px] font-bold text-accent uppercase tracking-wider">Apertura</span>
-                                                    {!isReadOnly && (
-                                                        <button onClick={() => setFairValueAsTradePrice(leg.id)} title="Imposta Fair Value" className="text-accent hover:scale-110 transition-transform active:scale-95">
-                                                            <MagicWandIcon />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                <div className="space-y-3">
-                                                    <div>
-                                                        <label className={labelClass}>Prezzo Apertura</label>
-                                                        <input type="number" step="0.01" value={leg.tradePrice} onChange={e => handleLegChange(leg.id, 'tradePrice', parseFloat(e.target.value))} className={`${inputBaseClass} font-mono border-accent/20`} disabled={isReadOnly} />
-                                                    </div>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <div className="min-w-0">
-                                                            <label className={`${labelClass} truncate`}>Data Apertura</label>
-                                                            <input type="date" value={leg.openingDate} onChange={e => handleLegChange(leg.id, 'openingDate', e.target.value)} className={inputBaseClass} disabled={isReadOnly} />
-                                                        </div>
-                                                        <div className="min-w-0">
-                                                            <label className={`${labelClass} truncate`}>Comm. Ape.</label>
-                                                            <input type="number" step="0.01" value={leg.openingCommission || 0} onChange={e => handleLegChange(leg.id, 'openingCommission', parseFloat(e.target.value) || 0)} className={`${inputBaseClass} font-mono text-center`} disabled={isReadOnly} />
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* Vertical Divider */}
-                                            <div className="hidden md:block w-px bg-slate-200 dark:bg-gray-700 self-stretch"></div>
-
-                                            {/* Chiusura */}
-                                            <div className="flex-1 space-y-4">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Chiusura</span>
-                                                </div>
-                                                <div className="space-y-3">
-                                                    <div>
-                                                        <label className={labelClass}>Prezzo Chiusura</label>
-                                                        <input type="number" step="0.01" placeholder="-" value={leg.closingPrice || ''} onChange={e => handleLegChange(leg.id, 'closingPrice', e.target.value === '' ? null : parseFloat(e.target.value))} className={`${inputBaseClass} font-mono`} disabled={isReadOnly} />
-                                                    </div>
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <div className="min-w-0">
-                                                            <label className={`${labelClass} truncate`}>Data Chiusura</label>
-                                                            <input type="date" value={leg.closingDate || ''} onChange={e => handleLegChange(leg.id, 'closingDate', e.target.value)} className={inputBaseClass} disabled={isReadOnly} />
-                                                        </div>
-                                                        <div className="min-w-0">
-                                                            <label className={`${labelClass} truncate`}>Comm. Chi.</label>
-                                                            <input type="number" step="0.01" value={leg.closingCommission || 0} onChange={e => handleLegChange(leg.id, 'closingCommission', parseFloat(e.target.value) || 0)} className={`${inputBaseClass} font-mono text-center`} disabled={isReadOnly} />
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* IV - Full Width */}
-                                        <div className="pt-5 border-t border-slate-200 dark:border-gray-700">
-                                            <div className="flex items-center justify-between mb-4">
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Volatilità Implicita (IV%)</label>
-                                                <div className="flex items-center space-x-2">
-                                                    <input 
-                                                        type="number" 
-                                                        value={leg.impliedVolatility} 
-                                                        onChange={e => handleLegChange(leg.id, 'impliedVolatility', parseFloat(e.target.value))} 
-                                                        className="w-16 bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-600 rounded px-2 py-1 text-xs font-mono text-center outline-none focus:ring-1 focus:ring-accent"
-                                                        disabled={isReadOnly}
-                                                    />
-                                                    <span className="text-[10px] font-bold text-slate-400">%</span>
-                                                </div>
-                                            </div>
-                                            <div className="px-1">
-                                                <input 
-                                                    type="range" 
-                                                    min="1" 
-                                                    max="100" 
-                                                    value={leg.impliedVolatility} 
-                                                    onChange={e => handleLegChange(leg.id, 'impliedVolatility', parseInt(e.target.value))}
-                                                    disabled={isReadOnly}
-                                                    className="w-full h-1.5 bg-slate-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-accent"
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
+                        <div className="flex justify-between items-center pt-2 border-t border-slate-100 dark:border-gray-700">
+                            <h3 className="text-sm font-bold text-slate-800 dark:text-white">Gambe</h3>
+                            {!isReadOnly && (
+                                <button 
+                                    onClick={sortLegsByDate}
+                                    className="text-xs font-bold text-accent hover:text-accent/80 flex items-center space-x-1"
+                                    title="Ordina per data di apertura"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+                                    </svg>
+                                    <span>Ordina per data</span>
+                                </button>
+                            )}
                         </div>
+
+                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                            <SortableContext items={localStructure.legs.map(l => l.id)} strategy={verticalListSortingStrategy}>
+                                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                                    {localStructure.legs.map((leg, idx) => (
+                                        <SortableLegItem 
+                                            key={leg.id}
+                                            leg={leg}
+                                            idx={idx}
+                                            isReadOnly={isReadOnly}
+                                            simulatedSpot={simulatedSpot}
+                                            inputBaseClass={inputBaseClass}
+                                            labelClass={labelClass}
+                                            handleLegChange={handleLegChange}
+                                            setFairValueAsTradePrice={setFairValueAsTradePrice}
+                                            removeLeg={(id: string) => setLocalStructure({...localStructure, legs: localStructure.legs.filter(l => l.id !== id)})}
+                                        />
+                                    ))}
+                                </div>
+                            </SortableContext>
+                        </DndContext>
 
                         {/* Action Buttons */}
                         <div className="pt-4 space-y-3">
@@ -609,11 +761,12 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                     {/* Chart */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-slate-200 dark:border-gray-700 shadow-sm h-[450px]">
                         <PayoffChart 
-                            legs={localStructure.legs.filter(l => l.enabled !== false)} 
+                            legs={localStructure.legs.filter(l => l.enabled !== false && !(l.closingPrice !== null && l.closingPrice !== undefined && Number(l.closingPrice) !== 0))} 
                             marketData={{...marketData, daxSpot: simulatedSpot}} 
                             multiplier={localStructure.multiplier}
                             structureStatus={('status' in localStructure) ? localStructure.status : 'Active'}
                             realizedPnl={('realizedPnl' in localStructure) ? localStructure.realizedPnl : undefined}
+                            extraPoints={analysis?.realizedPoints || 0}
                         />
                     </div>
 
@@ -630,6 +783,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                     <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium">
                                         <tr>
                                             <th className="px-3 py-2 text-left">Gamba</th>
+                                            <th className="px-3 py-2">Prezzo Ape.</th>
                                             <th className="px-3 py-2">Prezzo Att.</th>
                                             <th className="px-3 py-2">Punti</th>
                                             <th className="px-3 py-2">Lordo</th>
@@ -647,9 +801,30 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                     #{i + 1} {row.isClosed ? '(Chiusa)' : ''}
                                                 </td>
                                                 <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
-                                                    {row.currentPrice.toFixed(2)}
-                                                    {row.volatilityUsed && isLiveMode && !row.isClosed && (
-                                                        <span className="text-[9px] text-slate-400 ml-1 block">IV: {row.volatilityUsed.toFixed(1)}%</span>
+                                                    {leg?.tradePrice.toFixed(2)}
+                                                </td>
+                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
+                                                    {row.isClosed ? (
+                                                        row.currentPrice.toFixed(2)
+                                                    ) : (
+                                                        <div className="flex flex-col items-end gap-1">
+                                                            <input
+                                                                type="number"
+                                                                step="0.01"
+                                                                placeholder={row.fairValue.toFixed(2)}
+                                                                value={leg?.manualCurrentPrice ?? ''}
+                                                                onChange={(e) => {
+                                                                    const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                                                                    // @ts-ignore - manualCurrentPrice is added to OptionLeg but TS might complain if not fully propagated
+                                                                    handleLegChange(row.id, 'manualCurrentPrice', val);
+                                                                }}
+                                                                className="w-20 px-2 py-1 text-right text-xs border border-slate-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                                title="Prezzo manuale (lascia vuoto per calcolo automatico)"
+                                                            />
+                                                            {row.volatilityUsed && isLiveMode && (
+                                                                <span className="text-[9px] text-slate-400 block">IV: {row.volatilityUsed.toFixed(1)}%</span>
+                                                            )}
+                                                        </div>
                                                     )}
                                                 </td>
                                                 <td className={`px-3 py-2 font-mono ${row.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{row.pnlPoints.toFixed(2)}</td>
@@ -664,11 +839,13 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                         <tr>
                                             <td className="px-3 py-2 text-left text-slate-500">Realizzato</td>
                                             <td className="px-3 py-2"></td>
+                                            <td className="px-3 py-2"></td>
                                             <td className={`px-3 py-2 font-mono ${analysis?.realizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.realizedPoints.toFixed(2)}</td>
                                             <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.realizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.realizedPnl.toFixed(2)}</td>
                                         </tr>
                                         <tr>
                                             <td className="px-3 py-2 text-left text-slate-500">Non Realizz.</td>
+                                            <td className="px-3 py-2"></td>
                                             <td className="px-3 py-2"></td>
                                             <td className={`px-3 py-2 font-mono ${analysis?.unrealizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.unrealizedPoints.toFixed(2)}</td>
                                             <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.unrealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.unrealizedPnl.toFixed(2)}</td>
@@ -676,10 +853,26 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                         <tr className="bg-slate-100 dark:bg-gray-700">
                                             <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totale</td>
                                             <td className="px-3 py-2"></td>
+                                            <td className="px-3 py-2"></td>
                                             <td className={`px-3 py-2 font-mono ${analysis?.totals.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.totals.pnlPoints.toFixed(2)}</td>
                                             <td className={`px-3 py-2 font-mono ${analysis?.totals.gross >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.totals.gross.toFixed(2)}</td>
                                             <td className="px-3 py-2 font-mono text-warning">-€{analysis?.totals.comm.toFixed(2)}</td>
                                             <td className={`px-3 py-2 font-mono text-base ${analysis?.totals.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.totals.pnl.toFixed(2)}</td>
+                                        </tr>
+                                        {/* Global PDC Row */}
+                                        <tr className="bg-slate-200 dark:bg-gray-600 border-t border-slate-300 dark:border-gray-500">
+                                            <td colSpan={3} className="px-3 py-2 text-left text-slate-800 dark:text-white font-bold uppercase text-[10px] tracking-wider">
+                                                PDC Globale (Punti)
+                                                <span className="block text-[8px] font-normal text-slate-500 dark:text-gray-300 normal-case">
+                                                    (Incasso/Costo Netto Totale / Moltiplicatore)
+                                                </span>
+                                            </td>
+                                            <td className={`px-3 py-2 font-mono font-bold ${analysis?.globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>
+                                                {analysis?.globalPDC.toFixed(2)}
+                                            </td>
+                                            <td colSpan={3} className="px-3 py-2 text-right text-[10px] text-slate-500 dark:text-gray-400 italic">
+                                                {analysis?.globalPDC >= 0 ? 'Credito Netto' : 'Debito Netto'}
+                                            </td>
                                         </tr>
                                     </tfoot>
                                 </table>

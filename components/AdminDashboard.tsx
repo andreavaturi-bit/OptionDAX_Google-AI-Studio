@@ -63,15 +63,37 @@ const AdminDashboard: React.FC = () => {
                         <p className="text-xs text-slate-500 mt-1">Visibili a tutti gli utenti (default)</p>
                     </div>
                     <div className="divide-y divide-slate-100 dark:divide-gray-700 max-h-[600px] overflow-y-auto">
-                        {structures.map(s => (
+                        {structures.sort((a, b) => {
+                            const getNumericValue = (tag: string) => {
+                                if (!tag) return 0;
+                                const digits = tag.replace(/\D/g, '');
+                                return digits ? parseInt(digits, 10) : 0;
+                            };
+                            
+                            const valA = getNumericValue(a.tag);
+                            const valB = getNumericValue(b.tag);
+                            
+                            if (valA !== valB) {
+                                return valB - valA;
+                            }
+                            
+                            return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                        }).map(s => (
                             <div key={s.id} className="p-4 flex justify-between items-center">
                                 <div>
                                     <div className="font-bold text-slate-800 dark:text-white">{s.tag}</div>
                                     <div className="text-xs text-slate-500">{new Date(s.createdAt || '').toLocaleDateString()}</div>
                                 </div>
-                                <span className={`text-xs px-2 py-1 rounded-full ${s.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                                    {s.status}
-                                </span>
+                                <div className="flex items-center space-x-2">
+                                    {s.isShared && (
+                                        <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-1 rounded-full uppercase font-bold tracking-wider">
+                                            Condivisa
+                                        </span>
+                                    )}
+                                    <span className={`text-xs px-2 py-1 rounded-full ${s.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                                        {s.status}
+                                    </span>
+                                </div>
                             </div>
                         ))}
                     </div>

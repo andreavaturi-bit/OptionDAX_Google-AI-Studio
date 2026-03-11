@@ -15,6 +15,7 @@ const Header: React.FC<HeaderProps> = ({ onMenuToggle, theme, onToggleTheme }) =
         switch (currentView) {
             case 'list': return 'Portafoglio';
             case 'analysis': return 'Analisi';
+            case 'calculator': return 'Calcolatrice Opzioni';
             case 'settings': return 'Impostazioni';
             case 'detail': return 'Dettaglio Struttura';
             default: return 'Option DAX';

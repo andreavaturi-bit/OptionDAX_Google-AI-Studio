@@ -39,7 +39,10 @@ const calculateTotalGreeks = (structure: Structure, marketData: MarketData): Cal
         }
 
         const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-        const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
+        // Use current market volatility (VDAX) for active legs calculations
+        const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+        
+        const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
         const greeks = leg.optionType === 'Call' ? bs.callGreeks() : bs.putGreeks();
         acc.delta += greeks.delta * leg.quantity;
         acc.gamma += greeks.gamma * leg.quantity;
@@ -61,13 +64,20 @@ const calculatePnlInfoForStructure = (structure: Structure, marketData: MarketDa
         
         if (isLegClosed) {
             currentPrice = Number(leg.closingPrice);
+        } else if (leg.manualCurrentPrice !== null && leg.manualCurrentPrice !== undefined) {
+            currentPrice = leg.manualCurrentPrice;
         } else {
             const timeToExpiry = getTimeToExpiry(leg.expiryDate);
             if (timeToExpiry > 0) {
-                const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
+                // Use current market volatility (VDAX) for active legs calculations
+                const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+                
+                const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
                 currentPrice = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
             } else {
-                currentPrice = leg.optionType === 'Call' ? Math.max(0, marketData.daxSpot - leg.strike) : Math.max(0, leg.strike - marketData.daxSpot);
+                // Intrinsic value at expiry
+                const spot = marketData.daxSpot;
+                currentPrice = leg.optionType === 'Call' ? Math.max(0, spot - leg.strike) : Math.max(0, leg.strike - spot);
             }
         }
         
@@ -96,6 +106,33 @@ const calculatePnlInfoForStructure = (structure: Structure, marketData: MarketDa
 
 const calculateUnrealizedPnlForStructure = (structure: Structure, marketData: MarketData): number => {
     return calculatePnlInfoForStructure(structure, marketData).netPnl;
+};
+
+const calculateGlobalPDC = (structure: Structure): number => {
+    if (!structure.legs || structure.legs.length === 0) return 0;
+    
+    const totalNetCashFlow = structure.legs.reduce((acc, leg) => {
+        if (leg.enabled === false) return acc;
+
+        // Opening Flow
+        // Long (Qty > 0): Pays money -> Negative Flow
+        // Short (Qty < 0): Receives money -> Positive Flow
+        const openingFlow = -1 * leg.quantity * leg.tradePrice * structure.multiplier;
+        const openingComm = leg.openingCommission || 0;
+        
+        let legFlow = openingFlow - openingComm;
+
+        // Closing Flow
+        if (leg.closingPrice !== null && leg.closingPrice !== undefined) {
+             const closingFlow = leg.quantity * Number(leg.closingPrice) * structure.multiplier;
+             const closingComm = leg.closingCommission || 0;
+             legFlow += (closingFlow - closingComm);
+        }
+
+        return acc + legFlow;
+    }, 0);
+
+    return totalNetCashFlow / structure.multiplier;
 };
 
 const getMultiplierLabel = (m: number) => {
@@ -146,6 +183,9 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
     
     // Calculate Greeks for the structure
     const greeks = calculateTotalGreeks(structure, marketData);
+    
+    // Calculate Global PDC
+    const globalPDC = calculateGlobalPDC(structure);
 
     // Format creation date
     const creationDate = structure.createdAt 
@@ -199,16 +239,20 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
                 {isBulkEditMode && (
                     <div className="pl-6"><input type="checkbox" checked={isSelected} readOnly className="w-5 h-5 rounded text-accent" /></div>
                 )}
-                <div className={`flex-1 p-6 flex items-center justify-between ${isBulkEditMode ? 'pl-4' : (isDragEnabled ? 'pl-2' : 'pl-6')}`}>
-                    <div className="w-1/3">
-                        <h3 className="font-bold text-slate-900 dark:text-white group-hover:text-accent transition-colors text-lg">{structure.tag || 'Senza nome'}</h3>
-                        <div className="flex items-center gap-3 mt-1">
-                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                <div className={`flex-1 p-4 md:p-6 flex flex-col md:flex-row md:items-center justify-between ${isBulkEditMode ? 'pl-4' : (isDragEnabled ? 'pl-2' : 'pl-6')}`}>
+                    <div className="w-full md:w-1/3 mb-4 md:mb-0">
+                        <h3 className="font-bold text-slate-900 dark:text-white group-hover:text-accent transition-colors text-base md:text-lg truncate">{structure.tag || 'Senza nome'}</h3>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest whitespace-nowrap">
                                 {structure.legs.length} Gambe • {getMultiplierLabel(structure.multiplier)}
-                                {displayClosingDate && ` • Chiusa il ${displayClosingDate}`}
                             </p>
+                            {displayClosingDate && (
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest whitespace-nowrap">
+                                    • Chiusa il {displayClosingDate}
+                                </p>
+                            )}
                             {creationDate && (
-                                <span className="text-[10px] text-slate-300 dark:text-gray-600 flex items-center gap-1">
+                                <span className="text-[10px] text-slate-300 dark:text-gray-600 flex items-center gap-1 whitespace-nowrap">
                                     <Calendar className="w-3 h-3" /> {creationDate}
                                 </span>
                             )}
@@ -217,36 +261,40 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
 
                     {/* Greeks Display (Middle) */}
                     {structure.status === 'Active' && (
-                        <div className="flex-1 flex justify-center gap-6">
-                            <div className="flex flex-col items-center">
-                                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Delta</span>
-                                <span className="font-mono text-xs font-medium text-slate-700 dark:text-gray-300">{greeks.delta.toFixed(2)}</span>
+                        <div className="flex-1 grid grid-cols-2 md:flex md:justify-center gap-2 md:gap-6 mb-4 md:mb-0 bg-slate-50/50 dark:bg-gray-900/30 p-2 md:p-0 rounded-lg md:bg-transparent">
+                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 md:pr-6 md:mr-2">
+                                <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">PDC</span>
+                                <span className={`font-mono text-[10px] md:text-xs font-medium ${globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>{globalPDC.toFixed(2)}</span>
                             </div>
                             <div className="flex flex-col items-center">
-                                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Gamma</span>
-                                <span className="font-mono text-xs font-medium text-slate-700 dark:text-gray-300">{greeks.gamma.toFixed(3)}</span>
+                                <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Delta</span>
+                                <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{greeks.delta.toFixed(2)}</span>
                             </div>
                             <div className="flex flex-col items-center">
-                                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Theta</span>
-                                <span className={`font-mono text-xs font-medium ${greeks.theta >= 0 ? 'text-profit' : 'text-loss'}`}>{greeks.theta.toFixed(1)}</span>
+                                <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Gamma</span>
+                                <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{greeks.gamma.toFixed(3)}</span>
                             </div>
                             <div className="flex flex-col items-center">
-                                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Vega</span>
-                                <span className={`font-mono text-xs font-medium ${greeks.vega >= 0 ? 'text-profit' : 'text-loss'}`}>{greeks.vega.toFixed(1)}</span>
+                                <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Theta</span>
+                                <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.theta >= 0 ? 'text-profit' : 'text-loss'}`}>{greeks.theta.toFixed(1)}</span>
+                            </div>
+                            <div className="flex flex-col items-center">
+                                <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Vega</span>
+                                <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.vega >= 0 ? 'text-profit' : 'text-loss'}`}>{greeks.vega.toFixed(1)}</span>
                             </div>
                         </div>
                     )}
-                    {structure.status === 'Closed' && <div className="flex-1"></div>}
+                    {structure.status === 'Closed' && <div className="hidden md:flex flex-1"></div>}
 
-                    <div className="text-right w-1/4">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase block mb-1">
+                    <div className="text-right w-full md:w-1/4 flex flex-col justify-end items-end border-t md:border-t-0 border-slate-100 dark:border-gray-700 pt-3 md:pt-0">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase mb-1">
                             {structure.status === 'Closed' ? 'P&L Realizzato' : 'P&L Stimato'}
                         </span>
                         <div className="flex flex-col items-end">
                             <span className={`font-mono text-base font-bold ${pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                                 €{pnl.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
-                            <span className={`font-mono text-xs font-medium ${points >= 0 ? 'text-profit' : 'text-loss'}`}>
+                            <span className={`font-mono text-[10px] md:text-xs font-medium ${points >= 0 ? 'text-profit' : 'text-loss'}`}>
                                 {points > 0 ? '+' : ''}{points.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} pts
                             </span>
                         </div>
@@ -269,6 +317,7 @@ const StructureListView: React.FC = () => {
     const [sortMethod, setSortMethod] = useState<'date' | 'serial' | 'custom' | 'pnl'>('serial');
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const [customOrder, setCustomOrder] = useState<string[]>([]);
+    const [isVdaxFocused, setIsVdaxFocused] = useState(false);
 
     const activeStructures = useMemo(() => structures.filter(s => s.status === 'Active'), [structures]);
     const closedStructures = useMemo(() => structures.filter(s => s.status === 'Closed'), [structures]);
@@ -499,34 +548,72 @@ const StructureListView: React.FC = () => {
                             <h1 className="text-xl font-bold text-slate-900 dark:text-white">Live Portafoglio Attivo</h1>
                         </div>
                         <div className="flex items-center space-x-4">
-                            <div className="text-right">
-                                <div className="text-[10px] font-medium text-slate-400 uppercase tracking-tighter">Spot DAX</div>
+                            <div className="text-right hidden sm:block">
+                                <div className="text-[10px] font-medium text-slate-400 uppercase tracking-tighter">Ultimo Agg.</div>
                                 <div className="text-xs font-mono font-bold text-slate-500 dark:text-gray-400">
                                     {lastUpdate ? lastUpdate.toLocaleTimeString('it-IT') : '--:--'}
                                 </div>
                             </div>
-                            <div className={`flex items-center bg-slate-50 dark:bg-gray-900 border ${isPriceDelayed ? 'border-warning/50' : 'border-slate-200 dark:border-gray-700'} rounded-lg h-9 overflow-hidden`}>
-                                <input
-                                    type="number"
-                                    value={marketData.daxSpot}
-                                    onChange={(e) => setMarketData({ daxSpot: parseFloat(e.target.value) || 0 })}
-                                    className="bg-transparent w-24 px-3 text-center text-slate-900 dark:text-white font-mono focus:outline-none text-sm"
-                                    step="0.01"
-                                />
-                                <button onClick={refreshDaxSpot} disabled={isLoadingSpot} className="px-3 text-accent border-l border-slate-200 dark:border-gray-700 hover:bg-slate-100 dark:hover:bg-gray-700 transition">
-                                    <div className={isLoadingSpot ? "animate-spin" : ""}><CloudDownloadIcon /></div>
-                                </button>
+                            
+                            <div className="flex items-center gap-3">
+                                {/* Traffic Light Indicator */}
+                                <div 
+                                    className={`w-3 h-3 rounded-full transition-all duration-300 ${
+                                        (!lastUpdate || isPriceDelayed) 
+                                            ? 'bg-loss shadow-sm' 
+                                            : (marketData.daxSpot > 0 && marketData.daxVolatility > 0 && !marketData.isVolatilityFallback)
+                                                ? 'bg-profit shadow-[0_0_8px_rgba(34,197,94,0.6)]'
+                                                : 'bg-warning shadow-[0_0_8px_rgba(234,179,8,0.6)]'
+                                    }`} 
+                                    title={
+                                        (!lastUpdate || isPriceDelayed) ? "Dati non aggiornati" : 
+                                        (marketData.daxSpot > 0 && marketData.daxVolatility > 0 && !marketData.isVolatilityFallback) ? "Dati aggiornati" : 
+                                        marketData.isVolatilityFallback ? "Volatilità non disponibile (Default: 15)" :
+                                        "Aggiornamento parziale"
+                                    }
+                                ></div>
+
+                                <div className={`flex items-center bg-slate-50 dark:bg-gray-900 border ${isPriceDelayed ? 'border-loss/30' : 'border-slate-200 dark:border-gray-700'} rounded-lg h-9 overflow-hidden`}>
+                                    <div className="flex items-center border-r border-slate-200 dark:border-gray-700 px-3 bg-white/50 dark:bg-gray-800/50">
+                                        <span className="text-[10px] font-bold text-slate-400 mr-2">DAX</span>
+                                        <input
+                                            type="number"
+                                            value={marketData.daxSpot}
+                                            onChange={(e) => setMarketData({ daxSpot: parseFloat(e.target.value) || 0 })}
+                                            className="bg-transparent w-20 text-center text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
+                                            step="0.01"
+                                        />
+                                    </div>
+                                    <div className="flex items-center px-3 bg-white/50 dark:bg-gray-800/50">
+                                        <span className="text-[10px] font-bold text-slate-400 mr-2">VDAX</span>
+                                        <div className="flex items-center">
+                                            <input
+                                                type="number"
+                                                value={isVdaxFocused ? marketData.daxVolatility : Number(marketData.daxVolatility).toFixed(2)}
+                                                onFocus={() => setIsVdaxFocused(true)}
+                                                onBlur={() => setIsVdaxFocused(false)}
+                                                onChange={(e) => setMarketData({ daxVolatility: parseFloat(e.target.value) || 0 })}
+                                                className="bg-transparent w-16 text-right text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
+                                                step="0.01"
+                                            />
+                                            <span className="text-slate-900 dark:text-white font-mono text-sm font-bold ml-0.5">%</span>
+                                        </div>
+                                    </div>
+                                    <button onClick={refreshDaxSpot} disabled={isLoadingSpot} className="h-full px-3 text-accent border-l border-slate-200 dark:border-gray-700 hover:bg-slate-100 dark:hover:bg-gray-700 transition flex items-center justify-center bg-white dark:bg-gray-800">
+                                        <div className={isLoadingSpot ? "animate-spin" : ""}><CloudDownloadIcon /></div>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
                         {[
                             { 
                                 label: 'P/L Aperto', 
                                 val: (
                                     <div className="flex flex-col">
-                                        <span>€{totalPortfolioPnlInfo.netPnl.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                        <span className="text-xs opacity-80">{totalPortfolioPnlInfo.totalPoints > 0 ? '+' : ''}{totalPortfolioPnlInfo.totalPoints.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} pts</span>
+                                        <span className="truncate">€{totalPortfolioPnlInfo.netPnl.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioPnlInfo.totalPoints > 0 ? '+' : ''}{totalPortfolioPnlInfo.totalPoints.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} pts</span>
                                     </div>
                                 ), 
                                 color: totalPortfolioPnlInfo.netPnl >= 0 ? 'text-profit' : 'text-loss' 
@@ -537,8 +624,8 @@ const StructureListView: React.FC = () => {
                                 label: 'Theta (Θ)', 
                                 val: (
                                     <div className="flex flex-col">
-                                        <span>€{totalPortfolioGreeks.theta.toFixed(2)}</span>
-                                        <span className="text-xs opacity-80">{totalPortfolioGreeks.thetaPoints.toFixed(2)} pts</span>
+                                        <span className="truncate">€{totalPortfolioGreeks.theta.toFixed(2)}</span>
+                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioGreeks.thetaPoints.toFixed(2)} pts</span>
                                     </div>
                                 ),
                                 color: totalPortfolioGreeks.theta >= 0 ? 'text-profit' : 'text-loss' 
@@ -547,16 +634,16 @@ const StructureListView: React.FC = () => {
                                 label: 'Vega (ν)', 
                                 val: (
                                     <div className="flex flex-col">
-                                        <span>€{totalPortfolioGreeks.vega.toFixed(2)}</span>
-                                        <span className="text-xs opacity-80">{totalPortfolioGreeks.vegaPoints.toFixed(2)} pts</span>
+                                        <span className="truncate">€{totalPortfolioGreeks.vega.toFixed(2)}</span>
+                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioGreeks.vegaPoints.toFixed(2)} pts</span>
                                     </div>
                                 ),
                                 color: totalPortfolioGreeks.vega >= 0 ? 'text-profit' : 'text-loss' 
                             }
                         ].map((metric, i) => (
-                            <div key={i} className="bg-slate-50 dark:bg-gray-900/50 p-4 rounded-xl border border-slate-200 dark:border-gray-700/50">
-                                <span className="text-[10px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-widest">{metric.label}</span>
-                                <div className={`font-mono text-base font-bold mt-1 ${metric.color}`}>{metric.val}</div>
+                            <div key={i} className="bg-slate-50 dark:bg-gray-900/50 p-3 md:p-4 rounded-xl border border-slate-200 dark:border-gray-700/50">
+                                <span className="text-[9px] md:text-[10px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-widest">{metric.label}</span>
+                                <div className={`font-mono text-sm md:text-base font-bold mt-1 ${metric.color}`}>{metric.val}</div>
                             </div>
                         ))}
                     </div>

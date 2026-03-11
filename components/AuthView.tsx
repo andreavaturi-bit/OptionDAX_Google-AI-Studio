@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { LogoFull, CheckBadgeIcon } from './icons';
+import { LogoFull, CheckBadgeIcon, GoogleIcon } from './icons';
 
 const AuthView: React.FC = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -9,6 +9,19 @@ const AuthView: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
+
+  const handleGoogleLogin = async () => {
+    setLoading(true);
+    setError(null);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin
+      }
+    });
+    if (error) setError(error.message);
+    setLoading(false);
+  };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,44 +90,68 @@ const AuthView: React.FC = () => {
             {isLogin ? 'Accedi per gestire le tue opzioni' : 'Inizia la tua analisi professionale oggi'}
           </p>
 
-          <form onSubmit={handleAuth} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-400 dark:text-gray-500 uppercase tracking-wider mb-1">Email</label>
-              <input
-                type="email"
-                required
-                className="w-full bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded-lg px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-accent outline-none transition-all"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="nome@azienda.com"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-400 dark:text-gray-500 uppercase tracking-wider mb-1">Password</label>
-              <input
-                type="password"
-                required
-                className="w-full bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded-lg px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-accent outline-none transition-all"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-              />
-            </div>
+          <div className="space-y-4 mb-6">
+            <button
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-3 bg-white dark:bg-gray-700 border border-slate-200 dark:border-gray-600 hover:bg-slate-50 dark:hover:bg-gray-600 text-slate-700 dark:text-white font-semibold py-3 rounded-lg transition-all transform active:scale-[0.98] disabled:opacity-50"
+            >
+              <GoogleIcon className="w-5 h-5" />
+              <span>{isLogin ? 'Continua con Google' : 'Registrati con Google'}</span>
+            </button>
 
-            {error && (
-              <div className="p-3 bg-loss/10 border border-loss/20 rounded-lg text-loss text-sm text-center">
-                {error}
+            {isLogin && (
+              <div className="relative flex items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-200 dark:border-gray-600"></div>
+                </div>
+                <div className="relative bg-white dark:bg-gray-800 px-4 text-xs text-slate-400 dark:text-gray-500 uppercase font-bold tracking-wider">
+                  oppure
+                </div>
               </div>
             )}
+          </div>
 
-            <button
-              disabled={loading}
-              type="submit"
-              className="w-full bg-accent hover:bg-accent/90 text-white font-bold py-3 rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-[0.98] disabled:opacity-50"
-            >
-              {loading ? 'Elaborazione...' : isLogin ? 'Accedi' : 'Registrati'}
-            </button>
-          </form>
+          {isLogin && (
+            <form onSubmit={handleAuth} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 dark:text-gray-500 uppercase tracking-wider mb-1">Email</label>
+                <input
+                  type="email"
+                  required
+                  className="w-full bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded-lg px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-accent outline-none transition-all"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="nome@azienda.com"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 dark:text-gray-500 uppercase tracking-wider mb-1">Password</label>
+                <input
+                  type="password"
+                  required
+                  className="w-full bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded-lg px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-accent outline-none transition-all"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+              </div>
+
+              {error && (
+                <div className="p-3 bg-loss/10 border border-loss/20 rounded-lg text-loss text-sm text-center">
+                  {error}
+                </div>
+              )}
+
+              <button
+                disabled={loading}
+                type="submit"
+                className="w-full bg-accent hover:bg-accent/90 text-white font-bold py-3 rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-[0.98] disabled:opacity-50"
+              >
+                {loading ? 'Elaborazione...' : 'Accedi'}
+              </button>
+            </form>
+          )}
 
           <div className="mt-8 text-center">
             <button

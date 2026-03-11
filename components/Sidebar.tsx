@@ -4,6 +4,7 @@ import usePortfolioStore from '../store/portfolioStore';
 import useAuthStore from '../store/authStore';
 import useUserStore from '../store/userStore';
 import { PortfolioIcon, ChartBarIcon, SettingsIcon, SunIcon, MoonIcon, LogoFull, UsersIcon } from './icons';
+import { Calculator } from 'lucide-react';
 
 interface SidebarProps {
     isOpen: boolean;
@@ -20,11 +21,22 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, theme, onToggleTheme
     const navItems = [
         { id: 'list', label: 'Portafoglio', icon: <PortfolioIcon /> },
         { id: 'analysis', label: 'Analisi', icon: <ChartBarIcon /> },
+        { id: 'calculator', label: 'Calcolatore', icon: <Calculator className="w-5 h-5" /> },
         { id: 'settings', label: 'Impostazioni', icon: <SettingsIcon /> },
     ];
 
     if (profile?.role === 'admin') {
         navItems.push({ id: 'admin', label: 'Admin', icon: <UsersIcon /> });
+    } else if (profile?.role === 'client') {
+        navItems.push({ 
+            id: 'shared', 
+            label: 'Strategie Condivise', 
+            icon: (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+            ) 
+        });
     }
 
     const handleNavClick = (viewId: any) => {

@@ -8,7 +8,7 @@ import { BlackScholes, getYearFraction } from '../services/blackScholes';
 interface PortfolioState {
   structures: Structure[];
   marketData: MarketData;
-  currentView: 'list' | 'detail' | 'settings' | 'analysis' | 'admin';
+  currentView: 'list' | 'detail' | 'settings' | 'analysis' | 'admin' | 'shared' | 'calculator';
   currentStructureId: string | 'new' | null;
   isLoading: boolean;
   isLoadingSpot: boolean;
@@ -24,8 +24,9 @@ interface PortfolioState {
   reopenStructure: (structureId: string) => Promise<void>;
   setCurrentView: (view: PortfolioState['currentView'], id?: string | 'new' | null) => void;
   setMarketData: (data: Partial<MarketData>) => void;
-  shareStructure: (structureId: string, clientEmail: string) => Promise<void>;
-  fetchSharedUsers: (structureId: string) => Promise<UserProfile[]>;
+  fetchSharedStructures: () => Promise<Structure[]>;
+  importStructure: (structureId: string) => Promise<void>;
+  refreshDaxSpot: () => Promise<void>;
 }
 
 const usePortfolioStore = create<PortfolioState>((set, get) => ({
@@ -44,30 +45,12 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { set({ isLoading: false }); return; }
 
-      // Check user role
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-      let query = supabase
+      // Fetch ONLY user's own structures (or imported ones)
+      const { data, error } = await supabase
         .from('structures')
         .select(`*, legs(*)`)
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
-
-      if (profile?.role === 'client') {
-        // Client: fetch ALL structures (default share with all)
-        // We can add exclusion logic here later if needed
-        // For now, we just fetch everything, assuming clients are read-only viewers
-        
-        // No filter needed, query already selects all
-      } else {
-        // Admin: fetch own structures (RLS handles this usually, but explicit is fine)
-        query = query.eq('user_id', user.id);
-      }
-
-      const { data, error } = await query;
 
       if (error) throw error;
 
@@ -80,6 +63,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
           closingDate: s.closing_date,
           realizedPnl: s.realized_pnl,
           createdAt: s.created_at,
+          isShared: s.is_shared, // Map new column
           legs: (s.legs || []).map((l: any) => ({
             id: l.id,
             optionType: l.option_type,
@@ -92,7 +76,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
             closingDate: l.closing_date,
             impliedVolatility: l.implied_volatility,
             openingCommission: l.opening_commission,
-            closingCommission: l.closing_commission
+            closingCommission: l.closing_commission,
+            manualCurrentPrice: l.manual_current_price
           }))
         }));
         set({ structures: normalized as Structure[] });
@@ -104,57 +89,124 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
     }
   },
 
-  shareStructure: async (structureId, clientEmail) => {
+  fetchSharedStructures: async () => {
     try {
-        // Find user by email
-        const { data: users, error: userError } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('email', clientEmail)
-            .single();
+        // Fetch all structures where is_shared is true
+        // No need to filter by admin role if we trust the flag, 
+        // but typically only admins can set this flag anyway.
+        const { data, error } = await supabase
+            .from('structures')
+            .select(`*, legs(*)`)
+            .eq('is_shared', true)
+            .order('created_at', { ascending: false });
         
-        if (userError || !users) throw new Error("Utente non trovato");
-
-        const clientId = users.id;
-
-        // Check if already shared
-        const { data: existing } = await supabase
-            .from('shared_structures')
-            .select('id')
-            .eq('structure_id', structureId)
-            .eq('client_id', clientId)
-            .single();
-
-        if (existing) return; // Already shared
-
-        const { error } = await supabase
-            .from('shared_structures')
-            .insert([{ structure_id: structureId, client_id: clientId }]);
-
         if (error) throw error;
+
+        if (data) {
+            return (data as any[]).map(s => ({
+              id: s.id,
+              tag: s.tag,
+              status: s.status,
+              multiplier: s.multiplier,
+              closingDate: s.closing_date,
+              realizedPnl: s.realized_pnl,
+              createdAt: s.created_at,
+              isShared: s.is_shared,
+              legs: (s.legs || []).map((l: any) => ({
+                id: l.id,
+                optionType: l.option_type,
+                strike: l.strike,
+                expiryDate: l.expiry_date,
+                quantity: l.quantity,
+                tradePrice: l.trade_price,
+                openingDate: l.opening_date,
+                closingPrice: l.closing_price,
+                closingDate: l.closing_date,
+                impliedVolatility: l.implied_volatility,
+                openingCommission: l.opening_commission,
+                closingCommission: l.closing_commission,
+                manualCurrentPrice: l.manual_current_price
+              }))
+            })) as Structure[];
+        }
+        return [];
     } catch (error) {
-        console.error("Error sharing structure:", error);
-        throw error;
+        console.error("Error fetching shared structures:", error);
+        return [];
     }
   },
 
-  fetchSharedUsers: async (structureId) => {
+  importStructure: async (structureId: string) => {
+    set({ isLoading: true });
     try {
-        const { data, error } = await supabase
-            .from('shared_structures')
-            .select('client_id, profiles(email)')
-            .eq('structure_id', structureId);
-        
-        if (error) throw error;
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("Utente non autenticato");
 
-        return data.map((d: any) => ({
-            id: d.client_id,
-            email: d.profiles.email,
-            role: 'client'
-        }));
+        // 1. Fetch the original structure and legs
+        const { data: original, error: fetchError } = await supabase
+            .from('structures')
+            .select(`*, legs(*)`)
+            .eq('id', structureId)
+            .single();
+        
+        if (fetchError || !original) throw new Error("Struttura originale non trovata");
+
+        // Check if legs exist (if RLS blocks them, this will be empty)
+        if (!original.legs || original.legs.length === 0) {
+            throw new Error("La struttura condivisa non ha gambe visibili. Potrebbe essere un problema di permessi (RLS) sulla tabella 'legs'.");
+        }
+
+        // 2. Create a copy for the current user
+        const { data: newStruct, error: createError } = await supabase
+            .from('structures')
+            .insert([{
+                tag: `${original.tag} (Imported)`,
+                multiplier: original.multiplier,
+                status: 'Active', // Always import as active
+                user_id: user.id
+            }])
+            .select()
+            .single();
+        
+        if (createError || !newStruct) throw createError;
+
+        // 3. Copy legs
+        if (original.legs && original.legs.length > 0) {
+            const legsToInsert = original.legs.map((leg: any) => ({
+                structure_id: newStruct.id,
+                user_id: user.id,
+                option_type: leg.option_type,
+                strike: leg.strike,
+                expiry_date: leg.expiry_date,
+                quantity: leg.quantity,
+                trade_price: leg.trade_price,
+                opening_date: leg.opening_date,
+                // Reset closing info for imported structure? Or keep history?
+                // Usually importing means starting fresh or copying history. 
+                // Let's copy history but keep it open if the original was open.
+                closing_price: leg.closing_price,
+                closing_date: leg.closing_date,
+                implied_volatility: leg.implied_volatility,
+                opening_commission: leg.opening_commission,
+                closing_commission: leg.closing_commission,
+                manual_current_price: leg.manual_current_price
+            }));
+            
+            const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
+            if (legsError) throw legsError;
+        }
+
+        // 4. Refresh user's structures
+        await get().fetchStructures();
+        
+        // 5. Switch to list view
+        set({ currentView: 'list' });
+
     } catch (error) {
-        console.error("Error fetching shared users:", error);
-        return [];
+        console.error("Error importing structure:", error);
+        throw error;
+    } finally {
+        set({ isLoading: false });
     }
   },
 
@@ -168,7 +220,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         tag: newStructure.tag, 
         multiplier: newStructure.multiplier, 
         status: 'Active', 
-        user_id: user.id 
+        user_id: user.id,
+        is_shared: newStructure.isShared || false
       }])
       .select()
       .single();
@@ -189,7 +242,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         closing_date: leg.closingDate,
         implied_volatility: leg.impliedVolatility,
         opening_commission: leg.openingCommission,
-        closing_commission: leg.closingCommission
+        closing_commission: leg.closingCommission,
+        manual_current_price: leg.manualCurrentPrice
       }));
       const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
       if (legsError) throw legsError;
@@ -209,7 +263,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         multiplier: updatedStructure.multiplier, 
         status: updatedStructure.status,
         closing_date: updatedStructure.closingDate,
-        realized_pnl: updatedStructure.realizedPnl
+        realized_pnl: updatedStructure.realizedPnl,
+        is_shared: updatedStructure.isShared || false
       })
       .eq('id', updatedStructure.id);
 
@@ -231,7 +286,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         closing_date: leg.closingDate,
         implied_volatility: leg.impliedVolatility,
         opening_commission: leg.openingCommission,
-        closing_commission: leg.closingCommission
+        closing_commission: leg.closingCommission,
+        manual_current_price: leg.manualCurrentPrice
       }));
       const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
       if (legsError) throw legsError;
@@ -363,7 +419,11 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         const marketData = await fetchMarketData();
         
         if (marketData) {
-            const { daxSpot, daxVolatility } = marketData;
+            const { daxSpot, daxVolatility: fetchedVol } = marketData;
+            // Use fetched volatility if valid, otherwise default to 15 as requested
+            const daxVolatility = fetchedVol > 0 ? fetchedVol : 15;
+            const isVolatilityFallback = fetchedVol <= 0;
+            
             const now = new Date();
 
             set((state) => {
@@ -378,8 +438,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                         
                         // Use VDAX as the base IV, potentially adjusted by the leg's original IV spread if we had that info.
                         // For now, we use VDAX directly as the market IV proxy.
-                        // If daxVolatility is 0 (failed fetch), fallback to leg's impliedVolatility
-                        const currentIv = daxVolatility > 0 ? daxVolatility : leg.impliedVolatility; 
+                        const currentIv = daxVolatility; 
 
                         let currentPrice = 0;
                         if (timeToExpiry <= 0) {
@@ -413,7 +472,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                         ...state.marketData, 
                         daxSpot, 
                         daxVolatility,
-                        lastUpdate: Date.now() 
+                        lastUpdate: Date.now(),
+                        isVolatilityFallback
                     }, 
                     structures: updatedStructures,
                     isLoadingSpot: false, 

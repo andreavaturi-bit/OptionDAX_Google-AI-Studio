@@ -13,9 +13,10 @@ interface PayoffChartProps {
   multiplier: number;
   structureStatus?: 'Active' | 'Closed';
   realizedPnl?: number;
+  extraPoints?: number;
 }
 
-const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier, structureStatus, realizedPnl }) => {
+const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier, structureStatus, realizedPnl, extraPoints = 0 }) => {
     const [viewRange, setViewRange] = useState<number>(20); 
     const [simTimePercent, setSimTimePercent] = useState<number>(0); 
     const [isDarkMode, setIsDarkMode] = useState(false);
@@ -35,9 +36,16 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
     }, [legs]);
 
     const chartPoints = useMemo(() => {
-        if (legs.length === 0) return [];
-
         const currentSpot = marketData.daxSpot;
+        
+        if (legs.length === 0) {
+            const range = currentSpot * (viewRange / 100);
+            const xMin = Math.floor(currentSpot - range);
+            const xMax = Math.ceil(currentSpot + range);
+            const step = (xMax - xMin) / 100;
+            return Array.from({ length: 101 }, (_, i) => xMin + i * step);
+        }
+
         const strikes = legs.map(l => l.strike);
         
         const minStrike = Math.min(...strikes, currentSpot);
@@ -100,8 +108,8 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
         const t_elapsed = t_now_to_expiry * (simTimePercent / 100);
 
         return chartPoints.map(spot => {
-            let pnlAtFirstExpiry = 0;
-            let pnlSimulated = 0;
+            let pnlAtFirstExpiry = extraPoints;
+            let pnlSimulated = extraPoints;
 
             legs.forEach(leg => {
                 const legExpiry = new Date(leg.expiryDate);
@@ -114,7 +122,9 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
                         : Math.max(0, leg.strike - spot);
                 } else {
                     const t_remaining = getYearFraction(earliestExpiryDate.toISOString(), leg.expiryDate);
-                    const bs = new BlackScholes(spot, leg.strike, t_remaining, marketData.riskFreeRate, leg.impliedVolatility);
+                    // Use current market volatility (VDAX) if available
+                    const vol = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+                    const bs = new BlackScholes(spot, leg.strike, t_remaining, marketData.riskFreeRate, vol);
                     valAtExpiry = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
                 }
 
@@ -127,7 +137,9 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
                         ? Math.max(0, spot - leg.strike)
                         : Math.max(0, leg.strike - spot);
                 } else {
-                    const bsSim = new BlackScholes(spot, leg.strike, t_remaining_sim, marketData.riskFreeRate, leg.impliedVolatility);
+                    // Use current market volatility (VDAX) if available
+                    const vol = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+                    const bsSim = new BlackScholes(spot, leg.strike, t_remaining_sim, marketData.riskFreeRate, vol);
                     valSimulated = leg.optionType === 'Call' ? bsSim.callPrice() : bsSim.putPrice();
                 }
 
