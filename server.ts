@@ -36,8 +36,75 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  // Middleware to parse JSON bodies
+  app.use(express.json());
+
   console.log(`Starting server in ${process.env.NODE_ENV} mode`);
   console.log(`Configured to listen on port ${PORT}`);
+
+  // API Route for New User Notification Webhook
+  app.post("/api/notify-signup", async (req, res) => {
+    try {
+      // Verify Webhook Secret (optional but recommended)
+      const secret = req.headers['x-webhook-secret'];
+      if (process.env.WEBHOOK_SECRET && secret !== process.env.WEBHOOK_SECRET) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const payload = req.body;
+      
+      // Supabase sends the new record in payload.record
+      const newUserEmail = payload?.record?.email || "Email sconosciuta";
+      const newUserId = payload?.record?.id || "ID sconosciuto";
+
+      console.log(`New user signup detected: ${newUserEmail}`);
+
+      // Check if SMTP credentials are provided
+      if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        console.warn("SMTP credentials not configured. Skipping email notification.");
+        return res.status(200).json({ message: "Webhook received, but email skipped (no SMTP config)" });
+      }
+
+      // Dynamic import of nodemailer
+      const nodemailer = await import('nodemailer');
+
+      // Create reusable transporter object using the default SMTP transport
+      const transporter = nodemailer.createTransport({
+        service: 'gmail', // You can change this or use host/port for other providers
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      // Comma-separated list of admin emails from env var, or fallback
+      const adminEmails = process.env.ADMIN_EMAILS || process.env.SMTP_USER;
+
+      // Send mail with defined transport object
+      const info = await transporter.sendMail({
+        from: `"Option DAX Notifiche" <${process.env.SMTP_USER}>`,
+        to: adminEmails, // list of receivers
+        subject: "🎉 Nuovo iscritto su Option DAX!",
+        html: `
+          <div style="font-family: sans-serif; padding: 20px; background-color: #f8fafc; border-radius: 8px;">
+            <h2 style="color: #0f172a;">Nuova Iscrizione</h2>
+            <p style="color: #334155; font-size: 16px;">Un nuovo utente si è appena registrato alla piattaforma Option DAX.</p>
+            <div style="background-color: #ffffff; padding: 15px; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 20px;">
+              <p style="margin: 0; color: #0f172a;"><strong>Email:</strong> ${newUserEmail}</p>
+              <p style="margin: 5px 0 0 0; color: #64748b; font-size: 12px;"><strong>ID Utente:</strong> ${newUserId}</p>
+            </div>
+            <p style="color: #64748b; font-size: 12px; margin-top: 20px;">Questa è una notifica automatica generata dal sistema.</p>
+          </div>
+        `,
+      });
+
+      console.log("Notification email sent: %s", info.messageId);
+      res.status(200).json({ success: true, message: "Notification sent" });
+    } catch (error) {
+      console.error("Error sending notification email:", error);
+      res.status(500).json({ error: "Failed to send notification" });
+    }
+  });
 
   // API Route for Market Data
   app.get("/api/market-data", async (req, res) => {
