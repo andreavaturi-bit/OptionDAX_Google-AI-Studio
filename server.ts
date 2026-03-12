@@ -221,6 +221,15 @@ async function startServer() {
       server: { middlewareMode: true },
       appType: "spa",
     });
+    
+    // Force no-cache in development mode
+    app.use((req, res, next) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      next();
+    });
+    
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
@@ -234,10 +243,22 @@ async function startServer() {
         console.log(`Serving static files from ${distPath}`);
     }
 
-    app.use(express.static(distPath));
+    // Serve static files with no-cache for index.html
+    app.use(express.static(distPath, {
+      setHeaders: (res, path) => {
+        if (path.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        }
+      }
+    }));
     
     // Use regex for catch-all to be safe across Express versions
     app.get(/.*/, (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

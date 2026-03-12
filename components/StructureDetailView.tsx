@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -56,6 +56,109 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
         transition,
         isDragging,
     } = useSortable({ id: leg.id });
+
+    const [localTradePrice, setLocalTradePrice] = useState(leg.tradePrice.toString());
+    const [localClosingPrice, setLocalClosingPrice] = useState(leg.closingPrice?.toString() || '');
+    const lastParsedTradePrice = useRef(leg.tradePrice);
+    const lastParsedClosingPrice = useRef<number | null>(leg.closingPrice ?? null);
+
+    useEffect(() => {
+        const parsedLocal = parseFloat(localTradePrice.replace(',', '.'));
+        // Sync only if parent value changed externally (doesn't match our last sent value AND doesn't match current input)
+        if (leg.tradePrice !== lastParsedTradePrice.current && leg.tradePrice !== parsedLocal) {
+            // Allow intermediate states like ".", "-", etc. if parent is 0
+            if (isNaN(parsedLocal) && leg.tradePrice === 0) return;
+            
+            setLocalTradePrice(leg.tradePrice.toString());
+            lastParsedTradePrice.current = leg.tradePrice;
+        }
+    }, [leg.tradePrice]);
+
+    useEffect(() => {
+        const parsedLocal = parseFloat(localClosingPrice.replace(',', '.'));
+        const parentVal = leg.closingPrice ?? null;
+        if (parentVal !== lastParsedClosingPrice.current && parentVal !== parsedLocal) {
+            if (isNaN(parsedLocal) && parentVal === null) return;
+            
+            setLocalClosingPrice(leg.closingPrice?.toString() || '');
+            lastParsedClosingPrice.current = leg.closingPrice ?? null;
+        }
+    }, [leg.closingPrice]);
+
+    const handleTradePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value.replace(',', '.');
+        // Regex allows numbers, leading minus, and a single decimal point
+        if (val === '' || val === '-' || val === '.' || val === '-.' || /^-?\d*\.?\d*$/.test(val)) {
+            setLocalTradePrice(val);
+            
+            const parsed = parseFloat(val);
+            if (!isNaN(parsed)) {
+                // Valid number, update parent if it's actually different
+                if (parsed !== leg.tradePrice) {
+                    lastParsedTradePrice.current = parsed;
+                    handleLegChange(leg.id, 'tradePrice', parsed);
+                } else {
+                    // Even if value is same (e.g. "10."), sync ref to prevent useEffect reset
+                    lastParsedTradePrice.current = leg.tradePrice;
+                }
+            } else {
+                // Intermediate state (., -, etc.)
+                // We DON'T update the parent to avoid flickering/payoff issues,
+                // but we MUST update the ref to match current parent value
+                // so the useEffect doesn't trigger a reset.
+                lastParsedTradePrice.current = leg.tradePrice;
+            }
+        }
+    };
+
+    const handleClosingPriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value.replace(',', '.');
+        if (val === '' || val === '-' || val === '.' || val === '-.' || /^-?\d*\.?\d*$/.test(val)) {
+            setLocalClosingPrice(val);
+            
+            const parsed = parseFloat(val);
+            if (!isNaN(parsed)) {
+                if (parsed !== leg.closingPrice) {
+                    lastParsedClosingPrice.current = parsed;
+                    handleLegChange(leg.id, 'closingPrice', parsed);
+                } else {
+                    lastParsedClosingPrice.current = leg.closingPrice ?? null;
+                }
+            } else {
+                lastParsedClosingPrice.current = leg.closingPrice ?? null;
+            }
+        }
+    };
+
+    const handleTradePriceBlur = () => {
+        let val = localTradePrice;
+        if (val.endsWith('.')) {
+            val = val.slice(0, -1);
+        }
+        if (val === '' || val === '-') {
+            setLocalTradePrice('0');
+            lastParsedTradePrice.current = 0;
+            handleLegChange(leg.id, 'tradePrice', 0);
+        } else if (val !== localTradePrice) {
+            setLocalTradePrice(val);
+            lastParsedTradePrice.current = parseFloat(val);
+        }
+    };
+
+    const handleClosingPriceBlur = () => {
+        let val = localClosingPrice;
+        if (val.endsWith('.')) {
+            val = val.slice(0, -1);
+        }
+        if (val === '-') {
+            setLocalClosingPrice('');
+            lastParsedClosingPrice.current = null;
+            handleLegChange(leg.id, 'closingPrice', null);
+        } else if (val !== localClosingPrice) {
+            setLocalClosingPrice(val);
+            lastParsedClosingPrice.current = parseFloat(val);
+        }
+    };
 
     const style = {
         transform: CSS.Transform.toString(transform),
@@ -121,7 +224,7 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
                         <div className="space-y-3">
                             <div>
                                 <label className={labelClass}>Prezzo Apertura</label>
-                                <input type="number" step="0.01" value={leg.tradePrice} onChange={e => handleLegChange(leg.id, 'tradePrice', parseFloat(e.target.value))} className={`${inputBaseClass} font-mono border-accent/20`} disabled={isReadOnly} />
+                                <input type="text" inputMode="decimal" value={localTradePrice} onChange={handleTradePriceChange} onBlur={handleTradePriceBlur} className={`${inputBaseClass} font-mono border-accent/20`} disabled={isReadOnly} />
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div className="min-w-0">
@@ -147,7 +250,7 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
                         <div className="space-y-3">
                             <div>
                                 <label className={labelClass}>Prezzo Chiusura</label>
-                                <input type="number" step="0.01" placeholder="-" value={leg.closingPrice || ''} onChange={e => handleLegChange(leg.id, 'closingPrice', e.target.value === '' ? null : parseFloat(e.target.value))} className={`${inputBaseClass} font-mono`} disabled={isReadOnly} />
+                                <input type="text" inputMode="decimal" placeholder="-" value={localClosingPrice} onChange={handleClosingPriceChange} onBlur={handleClosingPriceBlur} className={`${inputBaseClass} font-mono`} disabled={isReadOnly} />
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div className="min-w-0">
@@ -272,10 +375,15 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
     }, [structureId]);
 
     const calculateLegFairValue = (leg: OptionLeg): number => {
-        const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-        const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
-        const price = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
-        return parseFloat(price.toFixed(2));
+        try {
+            const timeToExpiry = getTimeToExpiry(leg.expiryDate);
+            const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
+            const price = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
+            return isNaN(price) ? 0 : parseFloat(price.toFixed(2));
+        } catch (e) {
+            console.error("Fair value calculation error:", e);
+            return 0;
+        }
     };
 
     const handleLegChange = useCallback((id: string, field: keyof Omit<OptionLeg, 'id'>, value: any) => {
@@ -291,6 +399,13 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                     if (field === 'closingPrice' && value !== '' && value !== null) {
                         if (!newLeg.closingDate) {
                             newLeg.closingDate = new Date().toISOString().split('T')[0];
+                        }
+                    }
+                    
+                    // Automazione: Se inserisco prezzo apertura e la data è vuota, metti oggi
+                    if (field === 'tradePrice' && value !== '' && value !== null && value !== 0) {
+                        if (!newLeg.openingDate) {
+                            newLeg.openingDate = new Date().toISOString().split('T')[0];
                         }
                     }
                     return newLeg;
@@ -464,7 +579,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             
             // Use Live IV if in Live Mode, otherwise use Trade IV
             // We use marketData.daxVolatility directly to ensure consistency with List View and responsiveness
-            const volatilityToUse = isLiveMode && marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+            const volatilityToUse = isLiveMode && marketData.daxVolatility > 0 ? marketData.daxVolatility : (leg.impliedVolatility || 15);
             
             const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
             const fairValue = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
@@ -484,7 +599,8 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             // If Long (Qty > 0): (Current - Trade) * Qty.
             // If Short (Qty < 0): (Trade - Current) * abs(Qty)  ==> (Current - Trade) * Qty works for both algebraicaly.
             
-            const priceDiff = currentPrice - leg.tradePrice;
+            const tradePrice = isNaN(leg.tradePrice) ? 0 : leg.tradePrice;
+            const priceDiff = currentPrice - tradePrice;
             const pnlPoints = priceDiff * leg.quantity;
             
             const grossPnl = pnlPoints * localStructure.multiplier;

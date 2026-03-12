@@ -4,7 +4,7 @@ import usePortfolioStore from '../store/portfolioStore';
 import useAuthStore from '../store/authStore';
 import useUserStore from '../store/userStore';
 import { PortfolioIcon, ChartBarIcon, SettingsIcon, SunIcon, MoonIcon, LogoFull, UsersIcon } from './icons';
-import { Calculator } from 'lucide-react';
+import { Calculator, Bot } from 'lucide-react';
 
 interface SidebarProps {
     isOpen: boolean;
@@ -22,7 +22,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, theme, onToggleTheme
         { id: 'list', label: 'Portafoglio', icon: <PortfolioIcon /> },
         { id: 'analysis', label: 'Analisi', icon: <ChartBarIcon /> },
         { id: 'calculator', label: 'Calcolatore', icon: <Calculator className="w-5 h-5" /> },
-        { id: 'settings', label: 'Impostazioni', icon: <SettingsIcon /> },
+        { id: 'vitogpt', label: 'VitoGPT', icon: <Bot className="w-5 h-5" />, isExternal: true, url: 'https://notebooklm.google.com/notebook/c42f5811-2ded-4459-9136-4cf6e6e77bc0' },
     ];
 
     if (profile?.role === 'admin') {
@@ -38,6 +38,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, theme, onToggleTheme
             ) 
         });
     }
+
+    // Always push settings last
+    navItems.push({ id: 'settings', label: 'Impostazioni', icon: <SettingsIcon /> });
 
     const handleNavClick = (viewId: any) => {
         setCurrentView(viewId);
@@ -55,17 +58,37 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, theme, onToggleTheme
                     </div>
 
                     <nav className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
-                        {navItems.map((item) => (
-                            <button
-                                key={item.id}
-                                onClick={() => handleNavClick(item.id)}
-                                className={`w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${currentView === item.id ? 'bg-accent/10 text-accent' : 'text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-700/50'}`}
-                            >
-                                <span className="mr-3">{item.icon}</span>
-                                {item.label}
-                                {currentView === item.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
-                            </button>
-                        ))}
+                        {navItems.map((item) => {
+                            if ('isExternal' in item && item.isExternal) {
+                                return (
+                                    <a
+                                        key={item.id}
+                                        href={item.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-700/50"
+                                    >
+                                        <span className="mr-3">{item.icon}</span>
+                                        {item.label}
+                                        <svg className="ml-auto w-4 h-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                        </svg>
+                                    </a>
+                                );
+                            }
+
+                            return (
+                                <button
+                                    key={item.id}
+                                    onClick={() => handleNavClick(item.id)}
+                                    className={`w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${currentView === item.id ? 'bg-accent/10 text-accent' : 'text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-700/50'}`}
+                                >
+                                    <span className="mr-3">{item.icon}</span>
+                                    {item.label}
+                                    {currentView === item.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
+                                </button>
+                            );
+                        })}
                     </nav>
 
                     <div className="p-4 border-t border-slate-200 dark:border-gray-700 space-y-4">
