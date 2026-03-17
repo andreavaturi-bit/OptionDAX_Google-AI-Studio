@@ -83,8 +83,11 @@ export class BlackScholes {
 }
 
 export const getTimeToExpiry = (expiryDate: string): number => {
-    // BUG FIX: Ensure consistent UTC calculation.
+    // DAX options expire at 13:00 on the expiry day.
     const expiry = new Date(expiryDate);
+    // If the date string doesn't contain a time, it's parsed as UTC 00:00.
+    // We force it to 13:00 local time (which is CET/CEST for DAX).
+    expiry.setHours(13, 0, 0, 0);
     const diffTime = expiry.getTime() - Date.now();
     if (diffTime <= 0) return 0;
     const diffDays = diffTime / (1000 * 60 * 60 * 24);
@@ -95,6 +98,12 @@ export const getTimeToExpiry = (expiryDate: string): number => {
 export const getYearFraction = (fromDate: string | number, toDate: string): number => {
     const start = new Date(fromDate);
     const end = new Date(toDate);
+    
+    // If toDate is just a date string (YYYY-MM-DD), assume 13:00 expiry
+    if (typeof toDate === 'string' && toDate.length <= 10) {
+        end.setHours(13, 0, 0, 0);
+    }
+    
     const diffTime = end.getTime() - start.getTime();
     if (diffTime <= 0) return 0;
     return (diffTime / (1000 * 60 * 60 * 24)) / 365.0;

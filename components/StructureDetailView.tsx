@@ -18,7 +18,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { OptionLeg, MarketData, Structure, CalculatedGreeks } from '../types';
-import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
+import { BlackScholes, getTimeToExpiry, calculateImpliedVolatility } from '../services/blackScholes';
 import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import PayoffChart from './PayoffChart';
@@ -26,6 +26,7 @@ import { PlusIcon, TrashIcon, CloudDownloadIcon, CalculatorIcon, ArchiveIcon } f
 import ExpiryDateSelector, { findThirdFridayOfMonth } from './ExpiryDateSelector';
 import QuantitySelector from './QuantitySelector';
 import StrikeSelector from './StrikeSelector';
+import { formatNumber, formatCurrency, formatPercent, formatInputNumber } from '../utils/formatters';
 
 import useUserStore from '../store/userStore';
 
@@ -47,7 +48,7 @@ const MagicWandIcon = () => (
     </svg>
 );
 
-const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, labelClass, handleLegChange, setFairValueAsTradePrice, removeLeg }: any) => {
+const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, labelClass, handleLegChange, setFairValueAsTradePrice, removeLeg }: any) => {
     const {
         attributes,
         listeners,
@@ -57,106 +58,89 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
         isDragging,
     } = useSortable({ id: leg.id });
 
-    const [localTradePrice, setLocalTradePrice] = useState(leg.tradePrice.toString());
-    const [localClosingPrice, setLocalClosingPrice] = useState(leg.closingPrice?.toString() || '');
-    const lastParsedTradePrice = useRef(leg.tradePrice);
-    const lastParsedClosingPrice = useRef<number | null>(leg.closingPrice ?? null);
+    const [localTradePrice, setLocalTradePrice] = useState(formatInputNumber(leg.tradePrice));
+    const [localClosingPrice, setLocalClosingPrice] = useState(formatInputNumber(leg.closingPrice));
+    const isTradePriceFocused = useRef(false);
+    const isClosingPriceFocused = useRef(false);
 
+    // Sync from props only when NOT focused
     useEffect(() => {
-        const parsedLocal = parseFloat(localTradePrice.replace(',', '.'));
-        // Sync only if parent value changed externally (doesn't match our last sent value AND doesn't match current input)
-        if (leg.tradePrice !== lastParsedTradePrice.current && leg.tradePrice !== parsedLocal) {
-            // Allow intermediate states like ".", "-", etc. if parent is 0
-            if (isNaN(parsedLocal) && leg.tradePrice === 0) return;
-            
-            setLocalTradePrice(leg.tradePrice.toString());
-            lastParsedTradePrice.current = leg.tradePrice;
+        if (!isTradePriceFocused.current) {
+            setLocalTradePrice(formatInputNumber(leg.tradePrice));
         }
     }, [leg.tradePrice]);
 
     useEffect(() => {
-        const parsedLocal = parseFloat(localClosingPrice.replace(',', '.'));
-        const parentVal = leg.closingPrice ?? null;
-        if (parentVal !== lastParsedClosingPrice.current && parentVal !== parsedLocal) {
-            if (isNaN(parsedLocal) && parentVal === null) return;
-            
-            setLocalClosingPrice(leg.closingPrice?.toString() || '');
-            lastParsedClosingPrice.current = leg.closingPrice ?? null;
+        if (!isClosingPriceFocused.current) {
+            setLocalClosingPrice(formatInputNumber(leg.closingPrice));
         }
     }, [leg.closingPrice]);
 
     const handleTradePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const val = e.target.value.replace(',', '.');
-        // Regex allows numbers, leading minus, and a single decimal point
-        if (val === '' || val === '-' || val === '.' || val === '-.' || /^-?\d*\.?\d*$/.test(val)) {
-            setLocalTradePrice(val);
-            
-            const parsed = parseFloat(val);
+        const originalVal = e.target.value;
+        const valForParsing = originalVal.replace(',', '.');
+        
+        if (valForParsing === '' || valForParsing === '-' || valForParsing === '.' || valForParsing === '-.' || /^-?\d*\.?\d*$/.test(valForParsing)) {
+            setLocalTradePrice(originalVal);
+            const parsed = parseFloat(valForParsing);
             if (!isNaN(parsed)) {
-                // Valid number, update parent if it's actually different
-                if (parsed !== leg.tradePrice) {
-                    lastParsedTradePrice.current = parsed;
-                    handleLegChange(leg.id, 'tradePrice', parsed);
-                } else {
-                    // Even if value is same (e.g. "10."), sync ref to prevent useEffect reset
-                    lastParsedTradePrice.current = leg.tradePrice;
-                }
-            } else {
-                // Intermediate state (., -, etc.)
-                // We DON'T update the parent to avoid flickering/payoff issues,
-                // but we MUST update the ref to match current parent value
-                // so the useEffect doesn't trigger a reset.
-                lastParsedTradePrice.current = leg.tradePrice;
+                handleLegChange(leg.id, 'tradePrice', parsed);
             }
         }
     };
 
     const handleClosingPriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const val = e.target.value.replace(',', '.');
-        if (val === '' || val === '-' || val === '.' || val === '-.' || /^-?\d*\.?\d*$/.test(val)) {
-            setLocalClosingPrice(val);
-            
-            const parsed = parseFloat(val);
+        const originalVal = e.target.value;
+        const valForParsing = originalVal.replace(',', '.');
+        
+        if (valForParsing === '' || valForParsing === '-' || valForParsing === '.' || valForParsing === '-.' || /^-?\d*\.?\d*$/.test(valForParsing)) {
+            setLocalClosingPrice(originalVal);
+            const parsed = parseFloat(valForParsing);
             if (!isNaN(parsed)) {
-                if (parsed !== leg.closingPrice) {
-                    lastParsedClosingPrice.current = parsed;
-                    handleLegChange(leg.id, 'closingPrice', parsed);
-                } else {
-                    lastParsedClosingPrice.current = leg.closingPrice ?? null;
-                }
-            } else {
-                lastParsedClosingPrice.current = leg.closingPrice ?? null;
+                handleLegChange(leg.id, 'closingPrice', parsed);
+            } else if (valForParsing === '' || valForParsing === '-') {
+                handleLegChange(leg.id, 'closingPrice', null);
             }
         }
     };
 
     const handleTradePriceBlur = () => {
-        let val = localTradePrice;
+        isTradePriceFocused.current = false;
+        let val = localTradePrice.replace(',', '.');
         if (val.endsWith('.')) {
             val = val.slice(0, -1);
         }
         if (val === '' || val === '-') {
             setLocalTradePrice('0');
-            lastParsedTradePrice.current = 0;
             handleLegChange(leg.id, 'tradePrice', 0);
-        } else if (val !== localTradePrice) {
-            setLocalTradePrice(val);
-            lastParsedTradePrice.current = parseFloat(val);
+        } else {
+            const parsed = parseFloat(val);
+            if (!isNaN(parsed)) {
+                setLocalTradePrice(formatInputNumber(parsed));
+                handleLegChange(leg.id, 'tradePrice', parsed);
+            } else {
+                setLocalTradePrice(formatInputNumber(leg.tradePrice));
+            }
         }
     };
 
     const handleClosingPriceBlur = () => {
-        let val = localClosingPrice;
+        isClosingPriceFocused.current = false;
+        let val = localClosingPrice.replace(',', '.');
         if (val.endsWith('.')) {
             val = val.slice(0, -1);
         }
-        if (val === '-') {
+        if (val === '' || val === '-') {
             setLocalClosingPrice('');
-            lastParsedClosingPrice.current = null;
             handleLegChange(leg.id, 'closingPrice', null);
-        } else if (val !== localClosingPrice) {
-            setLocalClosingPrice(val);
-            lastParsedClosingPrice.current = parseFloat(val);
+        } else {
+            const parsed = parseFloat(val);
+            if (!isNaN(parsed)) {
+                setLocalClosingPrice(formatInputNumber(parsed));
+                handleLegChange(leg.id, 'closingPrice', parsed);
+            } else {
+                setLocalClosingPrice(formatInputNumber(leg.closingPrice));
+            }
         }
     };
 
@@ -224,7 +208,16 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
                         <div className="space-y-3">
                             <div>
                                 <label className={labelClass}>Prezzo Apertura</label>
-                                <input type="text" inputMode="decimal" value={localTradePrice} onChange={handleTradePriceChange} onBlur={handleTradePriceBlur} className={`${inputBaseClass} font-mono border-accent/20`} disabled={isReadOnly} />
+                                <input 
+                                    type="text" 
+                                    inputMode="decimal" 
+                                    value={localTradePrice} 
+                                    onChange={handleTradePriceChange} 
+                                    onFocus={() => { isTradePriceFocused.current = true; }}
+                                    onBlur={handleTradePriceBlur} 
+                                    className={`${inputBaseClass} font-mono border-accent/20`} 
+                                    disabled={isReadOnly} 
+                                />
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div className="min-w-0">
@@ -250,7 +243,17 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
                         <div className="space-y-3">
                             <div>
                                 <label className={labelClass}>Prezzo Chiusura</label>
-                                <input type="text" inputMode="decimal" placeholder="-" value={localClosingPrice} onChange={handleClosingPriceChange} onBlur={handleClosingPriceBlur} className={`${inputBaseClass} font-mono`} disabled={isReadOnly} />
+                                <input 
+                                    type="text" 
+                                    inputMode="decimal" 
+                                    placeholder="-" 
+                                    value={localClosingPrice} 
+                                    onChange={handleClosingPriceChange} 
+                                    onFocus={() => { isClosingPriceFocused.current = true; }}
+                                    onBlur={handleClosingPriceBlur} 
+                                    className={`${inputBaseClass} font-mono`} 
+                                    disabled={isReadOnly} 
+                                />
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div className="min-w-0">
@@ -268,7 +271,7 @@ const SortableLegItem = ({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, 
             </div>
         </div>
     );
-};
+});
 
 interface StructureDetailViewProps {
     structureId: string | 'new' | null;
@@ -379,7 +382,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             const timeToExpiry = getTimeToExpiry(leg.expiryDate);
             const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, leg.impliedVolatility);
             const price = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
-            return isNaN(price) ? 0 : parseFloat(price.toFixed(2));
+            return isNaN(price) ? 0 : Number(price.toFixed(2));
         } catch (e) {
             console.error("Fair value calculation error:", e);
             return 0;
@@ -387,7 +390,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
     };
 
     const handleLegChange = useCallback((id: string, field: keyof Omit<OptionLeg, 'id'>, value: any) => {
-        if (!localStructure || isReadOnly) return;
+        if (isReadOnly) return;
         
         setLocalStructure(prev => {
             if (!prev) return null;
@@ -414,7 +417,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             });
             return { ...prev, legs: updatedLegs };
         });
-    }, [localStructure, isReadOnly]);
+    }, [isReadOnly]);
 
     const setFairValueAsTradePrice = (id: string) => {
         if (!localStructure) return;
@@ -571,22 +574,32 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
         if (!localStructure) return null;
         
         const legAnalysis = localStructure.legs.map(leg => {
-            // Get live data from store if available
-            const storeStructure = structures.find(s => s.id === (localStructure as any).id);
-            const storeLeg = storeStructure?.legs.find(l => l.id === leg.id);
-            
             const timeToExpiry = getTimeToExpiry(leg.expiryDate);
-            
-            // Use Live IV if in Live Mode, otherwise use Trade IV
-            // We use marketData.daxVolatility directly to ensure consistency with List View and responsiveness
-            const volatilityToUse = isLiveMode && marketData.daxVolatility > 0 ? marketData.daxVolatility : (leg.impliedVolatility || 15);
-            
-            const bs = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
-            const fairValue = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
-            const greeks = leg.optionType === 'Call' ? bs.callGreeks() : bs.putGreeks();
+            const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
             
             // Check if specifically this leg is closed (has closing price)
             const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0;
+            
+            // Calculate Effective IV if there's a manual price
+            let effectiveIv = volatilityToUse;
+            if (!isLegClosed && leg.manualCurrentPrice !== null && leg.manualCurrentPrice !== undefined) {
+                const solvedIv = calculateImpliedVolatility(
+                    leg.manualCurrentPrice,
+                    marketData.daxSpot,
+                    leg.strike,
+                    timeToExpiry,
+                    marketData.riskFreeRate,
+                    leg.optionType
+                );
+                if (solvedIv !== null && !isNaN(solvedIv)) {
+                    effectiveIv = solvedIv;
+                }
+            }
+
+            // Theoretical price at SIMULATED spot (for current valuation)
+            const bsSim = new BlackScholes(simulatedSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, effectiveIv);
+            const fairValue = leg.optionType === 'Call' ? bsSim.callPrice() : bsSim.putPrice();
+            const greeks = leg.optionType === 'Call' ? bsSim.callGreeks() : bsSim.putGreeks();
             
             let currentPrice = fairValue;
             if (isLegClosed) {
@@ -596,9 +609,6 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             }
             
             // P&L calculation: (Exit - Entry) * Qty. 
-            // If Long (Qty > 0): (Current - Trade) * Qty.
-            // If Short (Qty < 0): (Trade - Current) * abs(Qty)  ==> (Current - Trade) * Qty works for both algebraicaly.
-            
             const tradePrice = isNaN(leg.tradePrice) ? 0 : leg.tradePrice;
             const priceDiff = currentPrice - tradePrice;
             const pnlPoints = priceDiff * leg.quantity;
@@ -613,7 +623,8 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             return {
                 id: leg.id,
                 fairValue,
-                currentPrice, // Add this for display
+                currentPrice,
+                effectiveIv,
                 pnlPoints,
                 grossPnl,
                 commissions,
@@ -625,7 +636,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                 vega: vegaPoints * localStructure.multiplier,   // Euro
                 thetaPoints,
                 vegaPoints,
-                volatilityUsed: volatilityToUse // For debug/display
+                volatilityUsed: effectiveIv
             };
         });
 
@@ -746,7 +757,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
 
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex-shrink-0">VDAX</span>
                     <span className={`font-mono font-bold text-xs md:text-sm flex-shrink-0 ${isLiveMode ? 'text-slate-600 dark:text-slate-300' : 'text-slate-400'}`}>
-                        {marketData.daxVolatility ? marketData.daxVolatility.toFixed(1) : '-'}%
+                        {marketData.daxVolatility ? formatPercent(marketData.daxVolatility, 1) : '-'}
                     </span>
 
                     {!isLiveMode && (
@@ -877,12 +888,17 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                     {/* Chart */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-slate-200 dark:border-gray-700 shadow-sm h-[450px]">
                         <PayoffChart 
-                            legs={localStructure.legs.filter(l => l.enabled !== false && !(l.closingPrice !== null && l.closingPrice !== undefined && Number(l.closingPrice) !== 0))} 
+                            legs={localStructure.legs.filter(l => l.enabled !== false)} 
                             marketData={{...marketData, daxSpot: simulatedSpot}} 
+                            actualMarketSpot={marketData.daxSpot}
                             multiplier={localStructure.multiplier}
                             structureStatus={('status' in localStructure) ? localStructure.status : 'Active'}
-                            realizedPnl={('realizedPnl' in localStructure) ? localStructure.realizedPnl : undefined}
-                            extraPoints={analysis?.realizedPoints || 0}
+                            realizedPnl={analysis?.totals.pnl}
+                            extraPoints={0}
+                            currentPrices={(analysis?.legAnalysis || []).reduce((acc, curr) => ({ ...acc, [curr.id]: curr.currentPrice }), {})}
+                            effectiveIvs={(analysis?.legAnalysis || []).reduce((acc, curr) => ({ ...acc, [curr.id]: curr.effectiveIv }), {})}
+                            closedPrices={(analysis?.legAnalysis || []).filter(l => l.isClosed).reduce((acc, curr) => ({ ...acc, [curr.id]: curr.currentPrice }), {})}
+                            legCommissions={(analysis?.legAnalysis || []).reduce((acc, curr) => ({ ...acc, [curr.id]: curr.commissions }), {})}
                         />
                     </div>
 
@@ -917,36 +933,36 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                     #{i + 1} {row.isClosed ? '(Chiusa)' : ''}
                                                 </td>
                                                 <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
-                                                    {leg?.tradePrice.toFixed(2)}
+                                                    {formatNumber(leg?.tradePrice)}
                                                 </td>
                                                 <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
                                                     {row.isClosed ? (
-                                                        row.currentPrice.toFixed(2)
+                                                        formatNumber(row.currentPrice)
                                                     ) : (
                                                         <div className="flex flex-col items-end gap-1">
                                                             <input
-                                                                type="number"
-                                                                step="0.01"
-                                                                placeholder={row.fairValue.toFixed(2)}
-                                                                value={leg?.manualCurrentPrice ?? ''}
+                                                                type="text"
+                                                                inputMode="decimal"
+                                                                placeholder={formatNumber(row.fairValue)}
+                                                                value={leg?.manualCurrentPrice !== null && leg?.manualCurrentPrice !== undefined ? formatInputNumber(leg.manualCurrentPrice) : ''}
                                                                 onChange={(e) => {
-                                                                    const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                                                                    const val = e.target.value === '' ? null : parseFloat(e.target.value.replace(',', '.'));
                                                                     // @ts-ignore - manualCurrentPrice is added to OptionLeg but TS might complain if not fully propagated
                                                                     handleLegChange(row.id, 'manualCurrentPrice', val);
                                                                 }}
-                                                                className="w-20 px-2 py-1 text-right text-xs border border-slate-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                                className="w-20 px-2 py-1 text-right text-xs border border-slate-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                                                                 title="Prezzo manuale (lascia vuoto per calcolo automatico)"
                                                             />
                                                             {row.volatilityUsed && isLiveMode && (
-                                                                <span className="text-[9px] text-slate-400 block">IV: {row.volatilityUsed.toFixed(1)}%</span>
+                                                                <span className="text-[9px] text-slate-400 block">IV: {formatPercent(row.volatilityUsed, 1)}</span>
                                                             )}
                                                         </div>
                                                     )}
                                                 </td>
-                                                <td className={`px-3 py-2 font-mono ${row.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{row.pnlPoints.toFixed(2)}</td>
-                                                <td className={`px-3 py-2 font-mono ${row.grossPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{row.grossPnl.toFixed(2)}</td>
-                                                <td className="px-3 py-2 font-mono text-warning">-€{row.commissions.toFixed(2)}</td>
-                                                <td className={`px-3 py-2 font-mono font-bold ${row.netPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{row.netPnl.toFixed(2)}</td>
+                                                <td className={`px-3 py-2 font-mono ${row.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(row.pnlPoints)}</td>
+                                                <td className={`px-3 py-2 font-mono ${row.grossPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(row.grossPnl)}</td>
+                                                <td className="px-3 py-2 font-mono text-warning">-{formatCurrency(row.commissions)}</td>
+                                                <td className={`px-3 py-2 font-mono font-bold ${row.netPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(row.netPnl)}</td>
                                             </tr>
                                             );
                                         })}
@@ -956,24 +972,24 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                             <td className="px-3 py-2 text-left text-slate-500">Realizzato</td>
                                             <td className="px-3 py-2"></td>
                                             <td className="px-3 py-2"></td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.realizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.realizedPoints.toFixed(2)}</td>
-                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.realizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.realizedPnl.toFixed(2)}</td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.realizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.realizedPoints)}</td>
+                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.realizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.realizedPnl)}</td>
                                         </tr>
                                         <tr>
                                             <td className="px-3 py-2 text-left text-slate-500">Non Realizz.</td>
                                             <td className="px-3 py-2"></td>
                                             <td className="px-3 py-2"></td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.unrealizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.unrealizedPoints.toFixed(2)}</td>
-                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.unrealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.unrealizedPnl.toFixed(2)}</td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.unrealizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.unrealizedPoints)}</td>
+                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.unrealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.unrealizedPnl)}</td>
                                         </tr>
                                         <tr className="bg-slate-100 dark:bg-gray-700">
                                             <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totale</td>
                                             <td className="px-3 py-2"></td>
                                             <td className="px-3 py-2"></td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{analysis?.totals.pnlPoints.toFixed(2)}</td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.gross >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.totals.gross.toFixed(2)}</td>
-                                            <td className="px-3 py-2 font-mono text-warning">-€{analysis?.totals.comm.toFixed(2)}</td>
-                                            <td className={`px-3 py-2 font-mono text-base ${analysis?.totals.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>€{analysis?.totals.pnl.toFixed(2)}</td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.totals.pnlPoints)}</td>
+                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.gross >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.gross)}</td>
+                                            <td className="px-3 py-2 font-mono text-warning">-{formatCurrency(analysis?.totals.comm)}</td>
+                                            <td className={`px-3 py-2 font-mono text-base ${analysis?.totals.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.pnl)}</td>
                                         </tr>
                                         {/* Global PDC Row */}
                                         <tr className="bg-slate-200 dark:bg-gray-600 border-t border-slate-300 dark:border-gray-500">
@@ -984,7 +1000,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                 </span>
                                             </td>
                                             <td className={`px-3 py-2 font-mono font-bold ${analysis?.globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                                {analysis?.globalPDC.toFixed(2)}
+                                                {formatNumber(analysis?.globalPDC)}
                                             </td>
                                             <td colSpan={3} className="px-3 py-2 text-right text-[10px] text-slate-500 dark:text-gray-400 italic">
                                                 {analysis?.globalPDC >= 0 ? 'Credito Netto' : 'Debito Netto'}
@@ -1024,12 +1040,12 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                     <td className="px-3 py-2 text-left font-mono truncate max-w-[100px]" title={`${leg.strike} ${leg.optionType}`}>
                                                         #{originalIndex + 1} {leg.strike} {leg.optionType.charAt(0)}
                                                     </td>
-                                                    <td className="px-3 py-2 font-mono">{row.delta.toFixed(2)}</td>
-                                                    <td className="px-3 py-2 font-mono">{row.gamma.toFixed(3)}</td>
-                                                    <td className="px-3 py-2 font-mono">{row.thetaPoints.toFixed(2)}</td>
-                                                    <td className="px-3 py-2 font-mono">€{row.theta.toFixed(2)}</td>
-                                                    <td className="px-3 py-2 font-mono">{row.vegaPoints.toFixed(2)}</td>
-                                                    <td className="px-3 py-2 font-mono">€{row.vega.toFixed(2)}</td>
+                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.delta)}</td>
+                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.gamma, 3)}</td>
+                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.thetaPoints)}</td>
+                                                    <td className="px-3 py-2 font-mono">{formatCurrency(row.theta)}</td>
+                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.vegaPoints)}</td>
+                                                    <td className="px-3 py-2 font-mono">{formatCurrency(row.vega)}</td>
                                                 </tr>
                                             );
                                         })}
@@ -1037,12 +1053,12 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                     <tfoot className="bg-slate-100 dark:bg-gray-700 font-bold border-t border-slate-200 dark:border-gray-700">
                                         <tr>
                                             <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totali</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.delta.toFixed(2)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.gamma.toFixed(3)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.thetaPoints.toFixed(2)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">€{analysis?.totals.theta.toFixed(2)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{analysis?.totals.vegaPoints.toFixed(2)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">€{analysis?.totals.vega.toFixed(2)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.delta)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.gamma, 3)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.thetaPoints)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatCurrency(analysis?.totals.theta)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.vegaPoints)}</td>
+                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatCurrency(analysis?.totals.vega)}</td>
                                         </tr>
                                     </tfoot>
                                 </table>

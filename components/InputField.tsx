@@ -1,5 +1,6 @@
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { formatInputNumber } from '../utils/formatters';
 
 interface InputFieldProps {
     label: string;
@@ -26,6 +27,24 @@ const InputField: React.FC<InputFieldProps> = ({
     min,
     max
 }) => {
+    const [localValue, setLocalValue] = useState<string>(
+        typeof value === 'number' ? formatInputNumber(value) : value.toString()
+    );
+
+    useEffect(() => {
+        const formattedValue = typeof value === 'number' ? formatInputNumber(value) : value.toString();
+        if (formattedValue !== localValue.replace(',', '.')) {
+             setLocalValue(formattedValue);
+        }
+    }, [value]);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        setLocalValue(val);
+        // Pass the value with period to the parent for parsing
+        onChange(val.replace(',', '.'));
+    };
+
     return (
         <div className={`flex flex-col ${className}`}>
             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
@@ -33,14 +52,12 @@ const InputField: React.FC<InputFieldProps> = ({
             </label>
             <div className="relative">
                 <input
-                    type={type}
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
+                    type="text"
+                    inputMode="decimal"
+                    value={localValue}
+                    onChange={handleChange}
                     className={`w-full bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
                     readOnly={readOnly}
-                    step={step}
-                    min={min}
-                    max={max}
                 />
                 {suffix && (
                     <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">

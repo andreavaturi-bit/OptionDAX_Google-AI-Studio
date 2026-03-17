@@ -6,6 +6,7 @@ import {
 import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import { TrendingUpIcon, TrendingDownIcon, ScaleIcon, CheckBadgeIcon, PlusCircleIcon, MinusCircleIcon } from './icons';
+import { formatNumber, formatCurrency, formatPercent } from '../utils/formatters';
 
 // Custom Tooltip for Equity Chart
 const CustomEquityTooltip = ({ active, payload }: any) => {
@@ -17,11 +18,11 @@ const CustomEquityTooltip = ({ active, payload }: any) => {
                 <div className="space-y-1">
                     <p className="text-accent font-semibold flex justify-between gap-4">
                         <span>Equity:</span>
-                        <span className="font-mono">{data.equity.toLocaleString('it-IT', { minimumFractionDigits: 2 })}€</span>
+                        <span className="font-mono">{formatCurrency(data.equity)}</span>
                     </p>
                     <p className="text-loss flex justify-between gap-4">
                         <span>Drawdown:</span>
-                        <span className="font-mono">{data.drawdown.toLocaleString('it-IT', { minimumFractionDigits: 2 })}€</span>
+                        <span className="font-mono">{formatCurrency(data.drawdown)}</span>
                     </p>
                 </div>
             </div>
@@ -37,7 +38,7 @@ const CustomPnlTooltip = ({ active, payload, label }: any) => {
             <div className="bg-white dark:bg-gray-900/90 p-3 border border-slate-200 dark:border-gray-600 rounded-xl shadow-xl text-sm backdrop-blur-sm">
                 <p className="font-bold text-slate-900 dark:text-gray-200 mb-1">{label}</p>
                 <p className={`font-semibold ${payload[0].value >= 0 ? 'text-profit' : 'text-loss'}`}>
-                    P&L Netto: {payload[0].value.toLocaleString('it-IT', { minimumFractionDigits: 2 })}€
+                    P&L Netto: {formatCurrency(payload[0].value)}
                 </p>
             </div>
         );
@@ -228,12 +229,9 @@ const PortfolioAnalysis: React.FC = () => {
     }
     
     const currencyFormatter = (value: number) => {
-        if (Math.abs(value) >= 1000) {
-            return `€${(value / 1000).toFixed(1)}k`;
-        }
-        return `€${Math.round(value)}`;
+        return formatCurrency(value, 0);
     };
-    const formatEuro = (val: number) => val.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '€';
+    const formatEuro = (val: number) => formatCurrency(val);
     
     const gridColor = isDarkMode ? "#374151" : "#f1f5f9";
     const axisColor = isDarkMode ? "#9ca3af" : "#94a3b8";
@@ -249,8 +247,8 @@ const PortfolioAnalysis: React.FC = () => {
 
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 <MetricCard icon={<TrendingUpIcon />} title="P&L Netto Totale" value={formatEuro(keyMetrics.totalNetPnl)} colorClass={keyMetrics.totalNetPnl >= 0 ? 'text-profit' : 'text-loss'} />
-                <MetricCard icon={<ScaleIcon />} title="Profit Factor" value={isFinite(keyMetrics.profitFactor) ? keyMetrics.profitFactor.toFixed(2) : '∞'} colorClass={keyMetrics.profitFactor >= 1 ? 'text-profit' : 'text-loss'} />
-                <MetricCard icon={<CheckBadgeIcon />} title="Win Rate" value={`${keyMetrics.winRate.toFixed(1)}%`} colorClass="text-accent"/>
+                <MetricCard icon={<ScaleIcon />} title="Profit Factor" value={isFinite(keyMetrics.profitFactor) ? formatNumber(keyMetrics.profitFactor) : '∞'} colorClass={keyMetrics.profitFactor >= 1 ? 'text-profit' : 'text-loss'} />
+                <MetricCard icon={<CheckBadgeIcon />} title="Win Rate" value={formatPercent(keyMetrics.winRate, 1)} colorClass="text-accent"/>
                 <MetricCard icon={<PlusCircleIcon />} title="Vincita Media" value={formatEuro(keyMetrics.avgWin)} colorClass="text-profit"/>
                 <MetricCard icon={<MinusCircleIcon />} title="Perdita Media" value={formatEuro(keyMetrics.avgLoss)} colorClass="text-loss"/>
                 <MetricCard icon={<TrendingDownIcon />} title="Max Drawdown" value={formatEuro(keyMetrics.maxDrawdown)} colorClass="text-loss"/>

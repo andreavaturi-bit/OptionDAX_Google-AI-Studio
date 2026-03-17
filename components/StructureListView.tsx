@@ -23,6 +23,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, ListFilter, Calendar, Hash, ArrowUpDown, ArrowUp, ArrowDown, Euro } from 'lucide-react';
+import { formatNumber, formatCurrency, formatPercent, formatInputNumber } from '../utils/formatters';
 
 // ... (keep existing helper functions like calculateTotalGreeks, calculateUnrealizedPnlForStructure, getMultiplierLabel)
 
@@ -264,23 +265,23 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
                         <div className="flex-1 grid grid-cols-2 md:flex md:justify-center gap-2 md:gap-6 mb-4 md:mb-0 bg-slate-50/50 dark:bg-gray-900/30 p-2 md:p-0 rounded-lg md:bg-transparent">
                             <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 md:pr-6 md:mr-2">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">PDC</span>
-                                <span className={`font-mono text-[10px] md:text-xs font-medium ${globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>{globalPDC.toFixed(2)}</span>
+                                <span className={`font-mono text-[10px] md:text-xs font-medium ${globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(globalPDC)}</span>
                             </div>
                             <div className="flex flex-col items-center">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Delta</span>
-                                <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{greeks.delta.toFixed(2)}</span>
+                                <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{formatNumber(greeks.delta)}</span>
                             </div>
                             <div className="flex flex-col items-center">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Gamma</span>
-                                <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{greeks.gamma.toFixed(3)}</span>
+                                <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{formatNumber(greeks.gamma, 3)}</span>
                             </div>
                             <div className="flex flex-col items-center">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Theta</span>
-                                <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.theta >= 0 ? 'text-profit' : 'text-loss'}`}>{greeks.theta.toFixed(1)}</span>
+                                <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.theta >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(greeks.theta, 1)}</span>
                             </div>
                             <div className="flex flex-col items-center">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Vega</span>
-                                <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.vega >= 0 ? 'text-profit' : 'text-loss'}`}>{greeks.vega.toFixed(1)}</span>
+                                <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.vega >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(greeks.vega, 1)}</span>
                             </div>
                         </div>
                     )}
@@ -292,10 +293,10 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
                         </span>
                         <div className="flex flex-col items-end">
                             <span className={`font-mono text-base font-bold ${pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                €{pnl.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                {formatCurrency(pnl)}
                             </span>
                             <span className={`font-mono text-[10px] md:text-xs font-medium ${points >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                {points > 0 ? '+' : ''}{points.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} pts
+                                {points > 0 ? '+' : ''}{formatNumber(points, 1)} pts
                             </span>
                         </div>
                     </div>
@@ -577,24 +578,24 @@ const StructureListView: React.FC = () => {
                                     <div className="flex items-center border-r border-slate-200 dark:border-gray-700 px-3 bg-white/50 dark:bg-gray-800/50">
                                         <span className="text-[10px] font-bold text-slate-400 mr-2">DAX</span>
                                         <input
-                                            type="number"
-                                            value={marketData.daxSpot}
-                                            onChange={(e) => setMarketData({ daxSpot: parseFloat(e.target.value) || 0 })}
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={formatInputNumber(marketData.daxSpot)}
+                                            onChange={(e) => setMarketData({ daxSpot: parseFloat(e.target.value.replace(',', '.')) || 0 })}
                                             className="bg-transparent w-20 text-center text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
-                                            step="0.01"
                                         />
                                     </div>
                                     <div className="flex items-center px-3 bg-white/50 dark:bg-gray-800/50">
                                         <span className="text-[10px] font-bold text-slate-400 mr-2">VDAX</span>
                                         <div className="flex items-center">
                                             <input
-                                                type="number"
-                                                value={isVdaxFocused ? marketData.daxVolatility : Number(marketData.daxVolatility).toFixed(2)}
+                                                type="text"
+                                                inputMode="decimal"
+                                                value={isVdaxFocused ? marketData.daxVolatility : formatInputNumber(marketData.daxVolatility)}
                                                 onFocus={() => setIsVdaxFocused(true)}
                                                 onBlur={() => setIsVdaxFocused(false)}
-                                                onChange={(e) => setMarketData({ daxVolatility: parseFloat(e.target.value) || 0 })}
+                                                onChange={(e) => setMarketData({ daxVolatility: parseFloat(e.target.value.replace(',', '.')) || 0 })}
                                                 className="bg-transparent w-16 text-right text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
-                                                step="0.01"
                                             />
                                             <span className="text-slate-900 dark:text-white font-mono text-sm font-bold ml-0.5">%</span>
                                         </div>
@@ -612,20 +613,20 @@ const StructureListView: React.FC = () => {
                                 label: 'P/L Aperto', 
                                 val: (
                                     <div className="flex flex-col">
-                                        <span className="truncate">€{totalPortfolioPnlInfo.netPnl.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioPnlInfo.totalPoints > 0 ? '+' : ''}{totalPortfolioPnlInfo.totalPoints.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} pts</span>
+                                        <span className="truncate">{formatCurrency(totalPortfolioPnlInfo.netPnl)}</span>
+                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioPnlInfo.totalPoints > 0 ? '+' : ''}{formatNumber(totalPortfolioPnlInfo.totalPoints, 1)} pts</span>
                                     </div>
                                 ), 
                                 color: totalPortfolioPnlInfo.netPnl >= 0 ? 'text-profit' : 'text-loss' 
                             },
-                            { label: 'Delta (Δ)', val: totalPortfolioGreeks.delta.toFixed(2), color: 'text-slate-900 dark:text-white' },
-                            { label: 'Gamma (Γ)', val: totalPortfolioGreeks.gamma.toFixed(3), color: 'text-slate-900 dark:text-white' },
+                            { label: 'Delta (Δ)', val: formatNumber(totalPortfolioGreeks.delta), color: 'text-slate-900 dark:text-white' },
+                            { label: 'Gamma (Γ)', val: formatNumber(totalPortfolioGreeks.gamma, 3), color: 'text-slate-900 dark:text-white' },
                             { 
                                 label: 'Theta (Θ)', 
                                 val: (
                                     <div className="flex flex-col">
-                                        <span className="truncate">€{totalPortfolioGreeks.theta.toFixed(2)}</span>
-                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioGreeks.thetaPoints.toFixed(2)} pts</span>
+                                        <span className="truncate">{formatCurrency(totalPortfolioGreeks.theta)}</span>
+                                        <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.thetaPoints)} pts</span>
                                     </div>
                                 ),
                                 color: totalPortfolioGreeks.theta >= 0 ? 'text-profit' : 'text-loss' 
@@ -634,8 +635,8 @@ const StructureListView: React.FC = () => {
                                 label: 'Vega (ν)', 
                                 val: (
                                     <div className="flex flex-col">
-                                        <span className="truncate">€{totalPortfolioGreeks.vega.toFixed(2)}</span>
-                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioGreeks.vegaPoints.toFixed(2)} pts</span>
+                                        <span className="truncate">{formatCurrency(totalPortfolioGreeks.vega)}</span>
+                                        <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.vegaPoints)} pts</span>
                                     </div>
                                 ),
                                 color: totalPortfolioGreeks.vega >= 0 ? 'text-profit' : 'text-loss' 

@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { formatNumber } from '../utils/formatters';
 
 interface ResultRowProps {
     label: string;
@@ -15,7 +16,7 @@ const ResultRow: React.FC<ResultRowProps> = ({ label, value, className = '', des
                 {label}
             </span>
             <span className="font-mono text-lg font-bold text-slate-900 dark:text-white">
-                {typeof value === 'number' ? value.toLocaleString('it-IT', { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : value}
+                {typeof value === 'number' ? formatNumber(value, 4) : value}
             </span>
         </div>
     );

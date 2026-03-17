@@ -6,6 +6,7 @@ import {
 } from 'recharts';
 import { MarketData, OptionLeg } from '../types';
 import { BlackScholes, getYearFraction } from '../services/blackScholes';
+import { formatNumber, formatCurrency } from '../utils/formatters';
 
 interface PayoffChartProps {
   legs: OptionLeg[];
@@ -14,9 +15,26 @@ interface PayoffChartProps {
   structureStatus?: 'Active' | 'Closed';
   realizedPnl?: number;
   extraPoints?: number;
+  actualMarketSpot?: number;
+  currentPrices?: Record<string, number>;
+  effectiveIvs?: Record<string, number>;
+  closedPrices?: Record<string, number>;
+  legCommissions?: Record<string, number>;
 }
 
-const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier, structureStatus, realizedPnl, extraPoints = 0 }) => {
+const PayoffChart: React.FC<PayoffChartProps> = ({ 
+    legs, 
+    marketData, 
+    multiplier, 
+    structureStatus, 
+    realizedPnl, 
+    extraPoints = 0,
+    actualMarketSpot,
+    currentPrices,
+    effectiveIvs,
+    closedPrices,
+    legCommissions
+}) => {
     const [viewRange, setViewRange] = useState<number>(20); 
     const [simTimePercent, setSimTimePercent] = useState<number>(0); 
     const [isDarkMode, setIsDarkMode] = useState(false);
@@ -31,7 +49,11 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
 
     const earliestExpiryDate = useMemo(() => {
         if (legs.length === 0) return new Date();
-        const dates = legs.map(l => new Date(l.expiryDate).getTime());
+        const dates = legs.map(l => {
+            const d = new Date(l.expiryDate);
+            d.setHours(13, 0, 0, 0); // DAX options expire at 13:00
+            return d.getTime();
+        });
         return new Date(Math.min(...dates));
     }, [legs]);
 
@@ -103,62 +125,74 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
         }
 
         const now = new Date();
-        const t_now_to_expiry = getYearFraction(now.toISOString(), earliestExpiryDate.toISOString());
+        const nowIso = now.toISOString();
+        const t_now_to_expiry = getYearFraction(nowIso, earliestExpiryDate.toISOString());
         
         const t_elapsed = t_now_to_expiry * (simTimePercent / 100);
 
-        return chartPoints.map(spot => {
-            let pnlAtFirstExpiry = extraPoints;
-            let pnlSimulated = extraPoints;
+        const safeExtraPoints = isNaN(extraPoints) ? 0 : extraPoints;
 
-            legs.forEach(leg => {
+        // Pre-calculate time to expiry for each leg to ensure consistency across the whole chart
+        const legTimes = legs.map(leg => getYearFraction(nowIso, leg.expiryDate));
+
+        return chartPoints.map(spot => {
+            let pnlAtFirstExpiryPoints = safeExtraPoints;
+            let pnlSimulatedPoints = safeExtraPoints;
+            let totalCommissions = 0;
+
+            legs.forEach((leg, idx) => {
                 const legExpiry = new Date(leg.expiryDate);
                 const isExpiringLeg = Math.abs(legExpiry.getTime() - earliestExpiryDate.getTime()) < 24 * 3600 * 1000;
 
+                const tradePrice = isNaN(leg.tradePrice) ? 0 : leg.tradePrice;
+                const t_total_leg = legTimes[idx];
+                
+                // Use effective IV if provided (anchored to manual price), otherwise use market/leg IV
+                const vol = effectiveIvs?.[leg.id] !== undefined 
+                    ? effectiveIvs[leg.id] 
+                    : (marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility);
+                
+                const commissions = legCommissions?.[leg.id] || 0;
+                totalCommissions += commissions;
+
+                const closedPrice = closedPrices?.[leg.id];
+
                 let valAtExpiry = 0;
-                if (isExpiringLeg) {
+                if (closedPrice !== undefined) {
+                    valAtExpiry = closedPrice;
+                } else if (isExpiringLeg) {
                     valAtExpiry = leg.optionType === 'Call'
                         ? Math.max(0, spot - leg.strike)
                         : Math.max(0, leg.strike - spot);
                 } else {
-                    const t_remaining = getYearFraction(earliestExpiryDate.toISOString(), leg.expiryDate);
-                    // Use current market volatility (VDAX) if available
-                    const vol = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
-                    const bs = new BlackScholes(spot, leg.strike, t_remaining, marketData.riskFreeRate, vol);
-                    valAtExpiry = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
+                    // For legs not expiring at earliestExpiryDate, use BS at that time with effective IV
+                    const t_remaining = Math.max(0.000001, t_total_leg - t_now_to_expiry);
+                    const bsExpiry = new BlackScholes(spot, leg.strike, t_remaining, marketData.riskFreeRate, vol);
+                    valAtExpiry = leg.optionType === 'Call' ? bsExpiry.callPrice() : bsExpiry.putPrice();
                 }
 
-                const t_total_leg = getYearFraction(now.toISOString(), leg.expiryDate);
-                const t_remaining_sim = Math.max(0, t_total_leg - t_elapsed);
+                pnlAtFirstExpiryPoints += (valAtExpiry - tradePrice) * leg.quantity;
 
-                let valSimulated = 0;
-                if (t_remaining_sim < 0.001) {
-                     valSimulated = leg.optionType === 'Call'
-                        ? Math.max(0, spot - leg.strike)
-                        : Math.max(0, leg.strike - spot);
+                // Simulated P&L (T+now + simTime)
+                let valSim = 0;
+                if (closedPrice !== undefined) {
+                    valSim = closedPrice;
                 } else {
-                    // Use current market volatility (VDAX) if available
-                    const vol = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
-                    const bsSim = new BlackScholes(spot, leg.strike, t_remaining_sim, marketData.riskFreeRate, vol);
-                    valSimulated = leg.optionType === 'Call' ? bsSim.callPrice() : bsSim.putPrice();
+                    const t_sim = Math.max(0.000001, t_total_leg - t_elapsed);
+                    const bsSim = new BlackScholes(spot, leg.strike, t_sim, marketData.riskFreeRate, vol);
+                    valSim = leg.optionType === 'Call' ? bsSim.callPrice() : bsSim.putPrice();
                 }
-
-                if (leg.quantity > 0) {
-                    pnlAtFirstExpiry += (valAtExpiry - leg.tradePrice) * leg.quantity;
-                    pnlSimulated += (valSimulated - leg.tradePrice) * leg.quantity;
-                } else {
-                    pnlAtFirstExpiry += (leg.tradePrice - valAtExpiry) * Math.abs(leg.quantity);
-                    pnlSimulated += (leg.tradePrice - valSimulated) * Math.abs(leg.quantity);
-                }
+                
+                pnlSimulatedPoints += (valSim - tradePrice) * leg.quantity;
             });
 
             return {
                 spot,
-                pnlExpiry: pnlAtFirstExpiry * multiplier,
-                pnlSim: pnlSimulated * multiplier
+                pnlExpiry: pnlAtFirstExpiryPoints * multiplier - totalCommissions,
+                pnlSim: pnlSimulatedPoints * multiplier - totalCommissions
             };
         });
-    }, [chartPoints, legs, earliestExpiryDate, marketData, simTimePercent, multiplier, structureStatus, realizedPnl]);
+    }, [chartPoints, legs, earliestExpiryDate, marketData, simTimePercent, multiplier, structureStatus, realizedPnl, extraPoints, effectiveIvs, closedPrices, legCommissions]);
 
     // Calculate gradients based on the Simulation PnL (Dashed line)
     const gradientOffsetSim = useMemo(() => {
@@ -190,13 +224,31 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
         return { exp: closest.pnlExpiry, sim: closest.pnlSim };
     }, [data, marketData.daxSpot]);
 
+    const simulatedDate = useMemo(() => {
+        const now = new Date();
+        const totalMs = earliestExpiryDate.getTime() - now.getTime();
+        if (totalMs <= 0) return earliestExpiryDate;
+        const simMs = now.getTime() + (totalMs * (simTimePercent / 100));
+        return new Date(simMs);
+    }, [earliestExpiryDate, simTimePercent]);
+
+    const formatSimDate = (date: Date) => {
+        return date.toLocaleString('it-IT', { 
+            day: '2-digit', 
+            month: '2-digit', 
+            year: 'numeric', 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+    };
+
     const CustomTooltip = ({ active, payload, label }: any) => {
         if (active && payload && payload.length) {
             return (
                 <div className="bg-slate-900/95 backdrop-blur border border-slate-700 p-3 rounded-lg shadow-xl text-xs z-50 min-w-[150px]">
                     <p className="text-gray-400 mb-2 border-b border-gray-700 pb-1 flex justify-between">
                         <span>Strike:</span>
-                        <span className="font-mono text-white font-bold">{Math.round(label)}</span>
+                        <span className="font-mono text-white font-bold">{formatNumber(label, 0)}</span>
                     </p>
                     <div className="space-y-1">
                         <div className="flex justify-between items-center">
@@ -204,14 +256,14 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
                                 {structureStatus === 'Closed' ? 'P&L Realizzato:' : 'A Scadenza:'}
                             </span>
                             <span className={`font-mono font-bold ${payload[0].value >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                {payload[0].value > 0 ? '+' : ''}{Math.round(payload[0].value)} €
+                                {payload[0].value > 0 ? '+' : ''}{formatCurrency(payload[0].value)}
                             </span>
                         </div>
                          {structureStatus !== 'Closed' && (
                          <div className="flex justify-between items-center">
-                            <span className="text-emerald-400 font-semibold">Stimato (T+{Math.round((simTimePercent/100)*30)}d):</span>
+                            <span className="text-emerald-400 font-semibold">Stimato ({simTimePercent === 0 ? 'Ora' : simTimePercent === 100 ? 'Scadenza' : formatSimDate(simulatedDate)}):</span>
                             <span className={`font-mono font-bold ${payload[1].value >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                {payload[1].value > 0 ? '+' : ''}{Math.round(payload[1].value)} €
+                                {payload[1].value > 0 ? '+' : ''}{formatCurrency(payload[1].value)}
                             </span>
                         </div>
                         )}
@@ -230,7 +282,7 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
             {/* Header Controls */}
             {structureStatus !== 'Closed' && (
             <div className="flex flex-wrap items-center justify-between p-2 border-b border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/50">
-                 <div className="flex items-center space-x-3 flex-1 min-w-[200px] mr-4">
+                 <div className="flex items-center space-x-3 flex-1 min-w-[300px] mr-4">
                     <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider w-14">Time</span>
                     <input 
                         type="range" 
@@ -240,9 +292,17 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
                         onChange={(e) => setSimTimePercent(parseInt(e.target.value))}
                         className="flex-1 h-1.5 bg-slate-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-[#3b82f6]"
                     />
-                     <span className="text-[10px] font-mono font-bold text-[#3b82f6] w-8 text-right">
-                        {simTimePercent === 0 ? 'T+0' : simTimePercent === 100 ? 'Exp' : `${simTimePercent}%`}
-                    </span>
+                     <div className="flex flex-col items-end min-w-[120px] flex-shrink-0 bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 rounded border border-blue-100 dark:border-blue-800">
+                        <span className="text-[10px] font-mono font-bold text-[#3b82f6] whitespace-nowrap">
+                            {simTimePercent === 0 ? 'T+0 (Ora)' : simTimePercent === 100 ? 'EXP (Scadenza)' : formatSimDate(simulatedDate)}
+                        </span>
+                        <div className="flex items-center justify-between w-full">
+                            <span className="text-[9px] text-slate-400 font-mono">
+                                {simTimePercent}%
+                            </span>
+                            <span className="text-[8px] text-blue-300 font-mono ml-2">v2</span>
+                        </div>
+                     </div>
                  </div>
                  
                  <div className="flex items-center space-x-3 text-[10px]">
@@ -290,7 +350,7 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
                             type="number" 
                             domain={['dataMin', 'dataMax']}
                             allowDataOverflow={false}
-                            tickFormatter={(value) => `${Math.round(value)}`}
+                            tickFormatter={(value) => formatNumber(value, 0)}
                             stroke={isDarkMode ? "#94a3b8" : "#64748b"}
                             fontSize={10}
                             tickLine={false}
@@ -298,7 +358,7 @@ const PayoffChart: React.FC<PayoffChartProps> = ({ legs, marketData, multiplier,
                             minTickGap={40}
                         />
                         <YAxis 
-                            tickFormatter={(value) => `€${value}`}
+                            tickFormatter={(value) => formatCurrency(value)}
                             stroke={isDarkMode ? "#94a3b8" : "#64748b"}
                             fontSize={10}
                             tickLine={false}

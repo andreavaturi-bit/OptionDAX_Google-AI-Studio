@@ -9,6 +9,7 @@ import { GoogleGenAI } from "@google/genai";
 import InputField from './InputField';
 import ResultRow from './ResultRow';
 import { calculateBlackScholes, calculateImpliedVolatility, Greeks } from '../utils/blackScholes';
+import { formatNumber, formatCurrency } from '../utils/formatters';
 
 // Initialize Gemini API
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -289,16 +290,12 @@ const OptionsCalculator: React.FC = () => {
                                 </button>
                             </div>
                             <div className="relative">
-                                <input
-                                    type="number"
-                                    value={riskFreeRate}
-                                    onChange={(e) => setRiskFreeRate(parseFloat(e.target.value) || 0)}
-                                    className="w-full bg-slate-50 dark:bg-gray-700 border border-slate-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    step="0.01"
+                                <InputField 
+                                    label="" 
+                                    value={riskFreeRate} 
+                                    onChange={v => setRiskFreeRate(parseFloat(v) || 0)} 
+                                    suffix="%"
                                 />
-                                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                                    <span className="text-slate-400 text-xs">%</span>
-                                </div>
                             </div>
                             {aiSources.length > 0 && (
                                 <div className="mt-2 flex flex-wrap gap-1">
@@ -343,7 +340,7 @@ const OptionsCalculator: React.FC = () => {
                         <div className="text-right">
                             <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Prezzo Teorico</span>
                             <div className={`text-3xl font-mono font-bold ${optionType === 'Call' ? 'text-blue-600' : 'text-orange-600'}`}>
-                                €{greeks.price.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                {formatCurrency(greeks.price)}
                             </div>
                         </div>
                     </div>
@@ -397,7 +394,7 @@ const OptionsCalculator: React.FC = () => {
                                         dataKey="spot" 
                                         type="number" 
                                         domain={['auto', 'auto']}
-                                        tickFormatter={(val) => val.toFixed(0)}
+                                        tickFormatter={(val) => formatNumber(val, 0)}
                                         stroke="#94a3b8"
                                         fontSize={12}
                                         tickLine={false}
@@ -408,13 +405,13 @@ const OptionsCalculator: React.FC = () => {
                                         fontSize={12}
                                         tickLine={false}
                                         axisLine={false}
-                                        tickFormatter={(val) => val.toFixed(3)}
+                                        tickFormatter={(val) => formatNumber(val, 3)}
                                     />
                                     <Tooltip 
                                         contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff' }}
                                         itemStyle={{ color: '#fff' }}
-                                        formatter={(value: number) => [value.toFixed(4), selectedMetric.charAt(0).toUpperCase() + selectedMetric.slice(1)]}
-                                        labelFormatter={(label) => `Spot: ${Number(label).toFixed(0)}`}
+                                        formatter={(value: number) => [formatNumber(value, 4), selectedMetric.charAt(0).toUpperCase() + selectedMetric.slice(1)]}
+                                        labelFormatter={(label) => `Spot: ${formatNumber(Number(label), 0)}`}
                                     />
                                     <ReferenceLine x={strikePrice} stroke="#94a3b8" strokeDasharray="3 3" label={{ value: 'Strike', position: 'insideTopRight', fill: '#94a3b8', fontSize: 10 }} />
                                     <Area 
