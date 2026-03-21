@@ -64,6 +64,7 @@ const SettingsView: React.FC = () => {
                         >
                             <option>AvaOptions</option>
                             <option>BGSaxo</option>
+                            <option>Saxo Bank</option>
                             <option>Interactive Brokers</option>
                             <option>Webank</option>
                         </select>

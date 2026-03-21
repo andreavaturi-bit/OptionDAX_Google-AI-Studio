@@ -3,6 +3,8 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import usePortfolioStore from '../store/portfolioStore';
 import { Structure, MarketData, CalculatedGreeks, Settings } from '../types';
 import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
+import { calculateStructureMargin } from '../utils/marginCalculator';
+import MarginGauge from './MarginGauge';
 import { PlusIcon, PortfolioIcon, TrashIcon, CloudDownloadIcon, ArchiveIcon } from './icons';
 import useSettingsStore from '../store/settingsStore';
 import {
@@ -188,6 +190,10 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
     // Calculate Global PDC
     const globalPDC = calculateGlobalPDC(structure);
 
+    // Calculate Margin for this structure
+    const { settings } = useSettingsStore();
+    const margin = calculateStructureMargin(structure, marketData, settings);
+
     // Format creation date
     const creationDate = structure.createdAt 
         ? new Date(structure.createdAt).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -262,24 +268,28 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
 
                     {/* Greeks Display (Middle) */}
                     {structure.status === 'Active' && (
-                        <div className="flex-1 grid grid-cols-2 md:flex md:justify-center gap-2 md:gap-6 mb-4 md:mb-0 bg-slate-50/50 dark:bg-gray-900/30 p-2 md:p-0 rounded-lg md:bg-transparent">
-                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 md:pr-6 md:mr-2">
+                        <div className="flex-1 grid grid-cols-2 md:grid-cols-6 gap-2 md:gap-0 mb-4 md:mb-0 bg-slate-50/50 dark:bg-gray-900/30 p-2 md:p-0 rounded-lg md:bg-transparent">
+                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 py-1">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">PDC</span>
                                 <span className={`font-mono text-[10px] md:text-xs font-medium ${globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(globalPDC)}</span>
                             </div>
-                            <div className="flex flex-col items-center">
+                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 py-1">
+                                <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Margine</span>
+                                <span className="font-mono text-[10px] md:text-xs font-medium text-amber-600 dark:text-amber-400">{formatCurrency(margin, 0)}</span>
+                            </div>
+                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 py-1">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Delta</span>
                                 <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{formatNumber(greeks.delta)}</span>
                             </div>
-                            <div className="flex flex-col items-center">
+                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 py-1">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Gamma</span>
                                 <span className="font-mono text-[10px] md:text-xs font-medium text-slate-700 dark:text-gray-300">{formatNumber(greeks.gamma, 3)}</span>
                             </div>
-                            <div className="flex flex-col items-center">
+                            <div className="flex flex-col items-center md:border-r md:border-slate-200 md:dark:border-gray-700 py-1">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Theta</span>
                                 <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.theta >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(greeks.theta, 1)}</span>
                             </div>
-                            <div className="flex flex-col items-center">
+                            <div className="flex flex-col items-center py-1">
                                 <span className="text-[8px] md:text-[9px] text-slate-400 font-bold uppercase tracking-wider">Vega</span>
                                 <span className={`font-mono text-[10px] md:text-xs font-medium ${greeks.vega >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(greeks.vega, 1)}</span>
                             </div>
@@ -319,6 +329,7 @@ const StructureListView: React.FC = () => {
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const [customOrder, setCustomOrder] = useState<string[]>([]);
     const [isVdaxFocused, setIsVdaxFocused] = useState(false);
+    const [marginBase, setMarginBase] = useState<'initial' | 'current'>('initial');
 
     const activeStructures = useMemo(() => structures.filter(s => s.status === 'Active'), [structures]);
     const closedStructures = useMemo(() => structures.filter(s => s.status === 'Closed'), [structures]);
@@ -528,6 +539,25 @@ const StructureListView: React.FC = () => {
         }, { netPnl: 0, totalPoints: 0 });
     }, [activeStructures, marketData]);
 
+    const totalOccupiedMargin = useMemo(() => {
+        return activeStructures.reduce((acc, structure) => {
+            return acc + calculateStructureMargin(structure, marketData, settings);
+        }, 0);
+    }, [activeStructures, marketData, settings]);
+
+    const currentCapital = useMemo(() => {
+        const realizedPnl = structures
+            .filter(s => s.status === 'Closed')
+            .reduce((acc, s) => acc + (s.realizedPnl || 0), 0);
+        return (Number(settings.initialCapital) || 0) + realizedPnl;
+    }, [structures, settings.initialCapital]);
+
+    const totalCapitalWithOpenPnl = useMemo(() => {
+        return currentCapital + totalPortfolioPnlInfo.netPnl;
+    }, [currentCapital, totalPortfolioPnlInfo.netPnl]);
+
+    const selectedCapital = marginBase === 'initial' ? (Number(settings.initialCapital) || 0) : totalCapitalWithOpenPnl;
+
     const handleSelect = useCallback((id: string) => {
         setSelectedIds(prev => {
             const newSet = new Set(prev);
@@ -546,7 +576,7 @@ const StructureListView: React.FC = () => {
                     <div className="flex flex-wrap gap-y-4 justify-between items-center mb-6">
                         <div className="flex items-center space-x-3">
                             <div className="text-slate-600 dark:text-gray-200"><PortfolioIcon /></div>
-                            <h1 className="text-xl font-bold text-slate-900 dark:text-white">Live Portafoglio Attivo</h1>
+                            <h1 className="text-xl font-bold text-slate-900 dark:text-white">Metriche di Portafoglio (Strutture Attive)</h1>
                         </div>
                         <div className="flex items-center space-x-4">
                             <div className="text-right hidden sm:block">
@@ -574,19 +604,19 @@ const StructureListView: React.FC = () => {
                                     }
                                 ></div>
 
-                                <div className={`flex items-center bg-slate-50 dark:bg-gray-900 border ${isPriceDelayed ? 'border-loss/30' : 'border-slate-200 dark:border-gray-700'} rounded-lg h-9 overflow-hidden`}>
-                                    <div className="flex items-center border-r border-slate-200 dark:border-gray-700 px-3 bg-white/50 dark:bg-gray-800/50">
-                                        <span className="text-[10px] font-bold text-slate-400 mr-2">DAX</span>
+                                <div className={`flex items-center bg-slate-50 dark:bg-gray-900 border ${isPriceDelayed ? 'border-loss/30' : 'border-slate-200 dark:border-gray-700'} rounded-lg h-9 overflow-hidden max-w-[calc(100vw-80px)] sm:max-w-none`}>
+                                    <div className="flex items-center border-r border-slate-200 dark:border-gray-700 px-2 sm:px-3 bg-white/50 dark:bg-gray-800/50">
+                                        <span className="text-[10px] font-bold text-slate-400 mr-1 sm:mr-2">DAX</span>
                                         <input
                                             type="text"
                                             inputMode="decimal"
                                             value={formatInputNumber(marketData.daxSpot)}
                                             onChange={(e) => setMarketData({ daxSpot: parseFloat(e.target.value.replace(',', '.')) || 0 })}
-                                            className="bg-transparent w-20 text-center text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
+                                            className="bg-transparent w-16 sm:w-20 text-center text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
                                         />
                                     </div>
-                                    <div className="flex items-center px-3 bg-white/50 dark:bg-gray-800/50">
-                                        <span className="text-[10px] font-bold text-slate-400 mr-2">VDAX</span>
+                                    <div className="flex items-center px-2 sm:px-3 bg-white/50 dark:bg-gray-800/50">
+                                        <span className="text-[10px] font-bold text-slate-400 mr-1 sm:mr-2">VDAX</span>
                                         <div className="flex items-center">
                                             <input
                                                 type="text"
@@ -595,58 +625,84 @@ const StructureListView: React.FC = () => {
                                                 onFocus={() => setIsVdaxFocused(true)}
                                                 onBlur={() => setIsVdaxFocused(false)}
                                                 onChange={(e) => setMarketData({ daxVolatility: parseFloat(e.target.value.replace(',', '.')) || 0 })}
-                                                className="bg-transparent w-16 text-right text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
+                                                className="bg-transparent w-12 sm:w-16 text-right text-slate-900 dark:text-white font-mono focus:outline-none text-sm font-bold"
                                             />
                                             <span className="text-slate-900 dark:text-white font-mono text-sm font-bold ml-0.5">%</span>
                                         </div>
                                     </div>
-                                    <button onClick={refreshDaxSpot} disabled={isLoadingSpot} className="h-full px-3 text-accent border-l border-slate-200 dark:border-gray-700 hover:bg-slate-100 dark:hover:bg-gray-700 transition flex items-center justify-center bg-white dark:bg-gray-800">
+                                    <button onClick={refreshDaxSpot} disabled={isLoadingSpot} className="h-full px-2 sm:px-3 text-accent border-l border-slate-200 dark:border-gray-700 hover:bg-slate-100 dark:hover:bg-gray-700 transition flex items-center justify-center bg-white dark:bg-gray-800 shrink-0">
                                         <div className={isLoadingSpot ? "animate-spin" : ""}><CloudDownloadIcon /></div>
                                     </button>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
-                        {[
-                            { 
-                                label: 'P/L Aperto', 
-                                val: (
-                                    <div className="flex flex-col">
-                                        <span className="truncate">{formatCurrency(totalPortfolioPnlInfo.netPnl)}</span>
-                                        <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioPnlInfo.totalPoints > 0 ? '+' : ''}{formatNumber(totalPortfolioPnlInfo.totalPoints, 1)} pts</span>
-                                    </div>
-                                ), 
-                                color: totalPortfolioPnlInfo.netPnl >= 0 ? 'text-profit' : 'text-loss' 
-                            },
-                            { label: 'Delta (Δ)', val: formatNumber(totalPortfolioGreeks.delta), color: 'text-slate-900 dark:text-white' },
-                            { label: 'Gamma (Γ)', val: formatNumber(totalPortfolioGreeks.gamma, 3), color: 'text-slate-900 dark:text-white' },
-                            { 
-                                label: 'Theta (Θ)', 
-                                val: (
-                                    <div className="flex flex-col">
-                                        <span className="truncate">{formatCurrency(totalPortfolioGreeks.theta)}</span>
-                                        <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.thetaPoints)} pts</span>
-                                    </div>
-                                ),
-                                color: totalPortfolioGreeks.theta >= 0 ? 'text-profit' : 'text-loss' 
-                            },
-                            { 
-                                label: 'Vega (ν)', 
-                                val: (
-                                    <div className="flex flex-col">
-                                        <span className="truncate">{formatCurrency(totalPortfolioGreeks.vega)}</span>
-                                        <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.vegaPoints)} pts</span>
-                                    </div>
-                                ),
-                                color: totalPortfolioGreeks.vega >= 0 ? 'text-profit' : 'text-loss' 
-                            }
-                        ].map((metric, i) => (
-                            <div key={i} className="bg-slate-50 dark:bg-gray-900/50 p-3 md:p-4 rounded-xl border border-slate-200 dark:border-gray-700/50">
-                                <span className="text-[9px] md:text-[10px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-widest">{metric.label}</span>
-                                <div className={`font-mono text-sm md:text-base font-bold mt-1 ${metric.color}`}>{metric.val}</div>
+                    <div className="flex flex-col lg:flex-row gap-6">
+                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+                            {[
+                                { 
+                                    label: 'P/L Aperto', 
+                                    val: (
+                                        <div className="flex flex-col">
+                                            <span className="truncate">{formatCurrency(totalPortfolioPnlInfo.netPnl)}</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioPnlInfo.totalPoints > 0 ? '+' : ''}{formatNumber(totalPortfolioPnlInfo.totalPoints, 1)} pts</span>
+                                        </div>
+                                    ), 
+                                    color: totalPortfolioPnlInfo.netPnl >= 0 ? 'text-profit' : 'text-loss' 
+                                },
+                                { 
+                                    label: 'Margine Occupato', 
+                                    val: formatCurrency(totalOccupiedMargin), 
+                                    color: 'text-amber-600 dark:text-amber-400' 
+                                },
+                                { label: 'Delta (Δ)', val: formatNumber(totalPortfolioGreeks.delta), color: 'text-slate-900 dark:text-white' },
+                                { label: 'Gamma (Γ)', val: formatNumber(totalPortfolioGreeks.gamma, 3), color: 'text-slate-900 dark:text-white' },
+                                { 
+                                    label: 'Theta (Θ)', 
+                                    val: (
+                                        <div className="flex flex-col">
+                                            <span className="truncate">{formatCurrency(totalPortfolioGreeks.theta)}</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.thetaPoints)} pts</span>
+                                        </div>
+                                    ),
+                                    color: totalPortfolioGreeks.theta >= 0 ? 'text-profit' : 'text-loss' 
+                                },
+                                { 
+                                    label: 'Vega (ν)', 
+                                    val: (
+                                        <div className="flex flex-col">
+                                            <span className="truncate">{formatCurrency(totalPortfolioGreeks.vega)}</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.vegaPoints)} pts</span>
+                                        </div>
+                                    ),
+                                    color: totalPortfolioGreeks.vega >= 0 ? 'text-profit' : 'text-loss' 
+                                }
+                            ].map((metric, i) => (
+                                <div key={i} className="bg-slate-50 dark:bg-gray-900/50 p-3 md:p-4 rounded-xl border border-slate-200 dark:border-gray-700/50">
+                                    <span className="text-[9px] md:text-[10px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-widest">{metric.label}</span>
+                                    <div className={`font-mono text-sm md:text-base font-bold mt-1 ${metric.color}`}>{metric.val}</div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="lg:w-48 shrink-0 flex flex-col gap-2">
+                            <MarginGauge occupiedMargin={totalOccupiedMargin} totalCapital={selectedCapital} />
+                            
+                            {/* Margin Base Selector */}
+                            <div className="flex bg-slate-100 dark:bg-gray-900 p-1 rounded-lg border border-slate-200 dark:border-gray-700">
+                                <button 
+                                    onClick={() => setMarginBase('initial')}
+                                    className={`flex-1 py-1 text-[9px] font-bold uppercase tracking-tighter rounded transition-all ${marginBase === 'initial' ? 'bg-white dark:bg-gray-800 text-accent shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                                >
+                                    Iniziale
+                                </button>
+                                <button 
+                                    onClick={() => setMarginBase('current')}
+                                    className={`flex-1 py-1 text-[9px] font-bold uppercase tracking-tighter rounded transition-all ${marginBase === 'current' ? 'bg-white dark:bg-gray-800 text-accent shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                                >
+                                    Attuale
+                                </button>
                             </div>
-                        ))}
+                        </div>
                     </div>
                 </div>
             )}

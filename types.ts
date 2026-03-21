@@ -53,7 +53,7 @@ export interface CalculatedGreeks {
 
 export interface Settings {
     initialCapital: number;
-    broker: 'AvaOptions' | 'Interactive Brokers' | 'Webank' | 'BGSaxo';
+    broker: 'AvaOptions' | 'Interactive Brokers' | 'Webank' | 'BGSaxo' | 'Saxo Bank';
     defaultMultiplier: 1 | 5 | 25;
     defaultOpeningCommission: number;
     defaultClosingCommission: number;

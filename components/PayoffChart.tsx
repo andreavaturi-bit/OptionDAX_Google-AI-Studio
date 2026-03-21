@@ -48,14 +48,27 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
     }, []);
 
     const earliestExpiryDate = useMemo(() => {
-        if (legs.length === 0) return new Date();
-        const dates = legs.map(l => {
+        // Filter only open legs (those not in closedPrices)
+        const openLegs = legs.filter(l => !closedPrices || closedPrices[l.id] === undefined);
+        
+        if (openLegs.length === 0) {
+            // If no open legs, use the earliest expiry of all legs (or today if none)
+            if (legs.length === 0) return new Date();
+            const allDates = legs.map(l => {
+                const d = new Date(l.expiryDate);
+                d.setHours(13, 0, 0, 0);
+                return d.getTime();
+            });
+            return new Date(Math.min(...allDates));
+        }
+
+        const dates = openLegs.map(l => {
             const d = new Date(l.expiryDate);
             d.setHours(13, 0, 0, 0); // DAX options expire at 13:00
             return d.getTime();
         });
         return new Date(Math.min(...dates));
-    }, [legs]);
+    }, [legs, closedPrices]);
 
     const chartPoints = useMemo(() => {
         const currentSpot = marketData.daxSpot;

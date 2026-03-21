@@ -95,7 +95,7 @@ export const getTimeToExpiry = (expiryDate: string): number => {
 };
 
 // Calcola la frazione di anno tra due date specifiche (in formato YYYY-MM-DD o Date object)
-export const getYearFraction = (fromDate: string | number, toDate: string): number => {
+export const getYearFraction = (fromDate: string | number | Date, toDate: string | number | Date): number => {
     const start = new Date(fromDate);
     const end = new Date(toDate);
     

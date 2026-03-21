@@ -19,6 +19,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { OptionLeg, MarketData, Structure, CalculatedGreeks } from '../types';
 import { BlackScholes, getTimeToExpiry, calculateImpliedVolatility } from '../services/blackScholes';
+import { calculateStructureMargin } from '../utils/marginCalculator';
 import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import PayoffChart from './PayoffChart';
@@ -47,6 +48,67 @@ const MagicWandIcon = () => (
         <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.8 6.5 10.866a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
     </svg>
 );
+
+// Componente per l'input del prezzo manuale con gestione locale dello stato per decimali (virgola)
+const ManualPriceInput = ({ initialValue, placeholder, onChange, className, title }: any) => {
+    const [localValue, setLocalValue] = useState(formatInputNumber(initialValue));
+    const isFocused = useRef(false);
+
+    useEffect(() => {
+        if (!isFocused.current) {
+            setLocalValue(formatInputNumber(initialValue));
+        }
+    }, [initialValue]);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const originalVal = e.target.value;
+        const valForParsing = originalVal.replace(',', '.');
+        
+        if (valForParsing === '' || valForParsing === '-' || valForParsing === '.' || valForParsing === '-.' || /^-?\d*\.?\d*$/.test(valForParsing)) {
+            setLocalValue(originalVal);
+            const parsed = parseFloat(valForParsing);
+            if (!isNaN(parsed)) {
+                onChange(parsed);
+            } else if (valForParsing === '' || valForParsing === '-') {
+                onChange(null);
+            }
+        }
+    };
+
+    const handleBlur = () => {
+        isFocused.current = false;
+        let val = localValue.replace(',', '.');
+        if (val.endsWith('.')) {
+            val = val.slice(0, -1);
+        }
+        if (val === '' || val === '-') {
+            setLocalValue('');
+            onChange(null);
+        } else {
+            const parsed = parseFloat(val);
+            if (!isNaN(parsed)) {
+                setLocalValue(formatInputNumber(parsed));
+                onChange(parsed);
+            } else {
+                setLocalValue(formatInputNumber(initialValue));
+            }
+        }
+    };
+
+    return (
+        <input
+            type="text"
+            inputMode="decimal"
+            placeholder={placeholder}
+            value={localValue}
+            onChange={handleChange}
+            onFocus={() => { isFocused.current = true; }}
+            onBlur={handleBlur}
+            className={className}
+            title={title}
+        />
+    );
+};
 
 const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, inputBaseClass, labelClass, handleLegChange, setFairValueAsTradePrice, removeLeg }: any) => {
     const {
@@ -175,20 +237,23 @@ const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, input
                 )}
             </div>
 
-            {/* Row 1: Basic Info */}
-            <div className={`grid grid-cols-2 md:grid-cols-10 gap-2 mb-3 ${leg.enabled === false ? 'opacity-50 pointer-events-none' : ''}`}>
-                <div className="col-span-2 md:col-span-3 flex rounded overflow-hidden border border-slate-200 dark:border-gray-600 h-[30px]">
-                    <button onClick={() => handleLegChange(leg.id, 'optionType', 'Call')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Call' ? 'bg-accent text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Call</button>
-                    <button onClick={() => handleLegChange(leg.id, 'optionType', 'Put')} className={`flex-1 text-[10px] font-bold uppercase ${leg.optionType === 'Put' ? 'bg-warning text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500'}`} disabled={isReadOnly}>Put</button>
+            {/* Row 1: Basic Info - Reorganized for better visibility on small screens */}
+            <div className={`grid grid-cols-2 gap-3 mb-4 ${leg.enabled === false ? 'opacity-50 pointer-events-none' : ''}`}>
+                {/* First row: Type and Quantity */}
+                <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-gray-600 h-[34px] shadow-sm">
+                    <button onClick={() => handleLegChange(leg.id, 'optionType', 'Call')} className={`flex-1 text-[11px] font-bold uppercase transition-colors ${leg.optionType === 'Call' ? 'bg-accent text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500 hover:bg-slate-100'}`} disabled={isReadOnly}>Call</button>
+                    <button onClick={() => handleLegChange(leg.id, 'optionType', 'Put')} className={`flex-1 text-[11px] font-bold uppercase transition-colors ${leg.optionType === 'Put' ? 'bg-warning text-white' : 'bg-slate-50 dark:bg-gray-700 text-slate-500 hover:bg-slate-100'}`} disabled={isReadOnly}>Put</button>
                 </div>
-                <div className="col-span-1 md:col-span-2">
-                    <QuantitySelector value={leg.quantity} onChange={v => handleLegChange(leg.id, 'quantity', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                <div className="relative">
+                    <QuantitySelector value={leg.quantity} onChange={v => handleLegChange(leg.id, 'quantity', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[34px] w-full`} />
                 </div>
-                <div className="col-span-1 md:col-span-2">
-                    <StrikeSelector value={leg.strike} onChange={v => handleLegChange(leg.id, 'strike', v)} spotPrice={simulatedSpot} optionType={leg.optionType} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                
+                {/* Second row: Strike and Expiry */}
+                <div className="relative">
+                    <StrikeSelector value={leg.strike} onChange={v => handleLegChange(leg.id, 'strike', v)} spotPrice={simulatedSpot} optionType={leg.optionType} disabled={isReadOnly} className={`${inputBaseClass} h-[34px] w-full`} />
                 </div>
-                <div className="col-span-2 md:col-span-3">
-                    <ExpiryDateSelector value={leg.expiryDate} onChange={v => handleLegChange(leg.id, 'expiryDate', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[30px]`} />
+                <div className="relative">
+                    <ExpiryDateSelector value={leg.expiryDate} onChange={v => handleLegChange(leg.id, 'expiryDate', v)} disabled={isReadOnly} className={`${inputBaseClass} h-[34px] w-full`} />
                 </div>
             </div>
 
@@ -514,13 +579,13 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
         if (!localStructure || !('id' in localStructure) || isSaving) return;
 
         const missingPrice = localStructure.legs.some(l => 
-            l.closingPrice === null || l.closingPrice === undefined || Number(l.closingPrice) === 0
+            l.closingPrice === null || l.closingPrice === undefined
         );
         
         if (missingPrice) {
             setValidationMessage({
                 title: "Dati Mancanti",
-                message: "Per archiviare la strategia, è necessario inserire il prezzo di chiusura per tutte le gambe."
+                message: "Per archiviare la strategia, è necessario inserire il prezzo di chiusura per tutte le gambe (può essere 0)."
             });
             setConfirmClose(false);
             return;
@@ -578,7 +643,8 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
             
             // Check if specifically this leg is closed (has closing price)
-            const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0;
+            // Fix: allow 0 as a valid closing price
+            const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined;
             
             // Calculate Effective IV if there's a manual price
             let effectiveIv = volatilityToUse;
@@ -710,8 +776,10 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             return !l.isClosed && leg?.enabled !== false;
         }).reduce((acc, l) => acc + l.pnlPoints, 0);
 
-        return { legAnalysis, totals, realizedPnl, realizedPoints, unrealizedPnl, unrealizedPoints, globalPDC };
-    }, [localStructure, simulatedSpot, marketData.riskFreeRate, isLiveMode, structures, marketData.daxVolatility]); // Use simulatedSpot
+        const occupiedMargin = calculateStructureMargin(localStructure as Structure, marketData, settings);
+
+        return { legAnalysis, totals, realizedPnl, realizedPoints, unrealizedPnl, unrealizedPoints, globalPDC, occupiedMargin };
+    }, [localStructure, simulatedSpot, marketData.riskFreeRate, isLiveMode, structures, marketData.daxVolatility, settings]); // Use simulatedSpot
 
     if (!localStructure) return null;
 
@@ -765,6 +833,34 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                             <CloudDownloadIcon />
                         </button>
                     )}
+                </div>
+            </div>
+
+            {/* Quick Metrics Bar */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-white dark:bg-gray-800 p-3 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">P&L Totale</span>
+                    <div className={`text-sm font-mono font-bold mt-1 ${(analysis?.totals.pnl || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        {formatCurrency(analysis?.totals.pnl || 0)}
+                    </div>
+                </div>
+                <div className="bg-white dark:bg-gray-800 p-3 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Margine Occupato</span>
+                    <div className="text-sm font-mono font-bold text-amber-600 dark:text-amber-400 mt-1">
+                        {formatCurrency(analysis?.occupiedMargin || 0)}
+                    </div>
+                </div>
+                <div className="bg-white dark:bg-gray-800 p-3 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">PDC Globale</span>
+                    <div className={`text-sm font-mono font-bold mt-1 ${(analysis?.globalPDC || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        {formatNumber(analysis?.globalPDC || 0)}
+                    </div>
+                </div>
+                <div className="bg-white dark:bg-gray-800 p-3 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Delta Totale</span>
+                    <div className="text-sm font-mono font-bold text-slate-700 dark:text-gray-300 mt-1">
+                        {formatNumber(analysis?.totals.delta || 0)}
+                    </div>
                 </div>
             </div>
 
@@ -940,16 +1036,10 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                         formatNumber(row.currentPrice)
                                                     ) : (
                                                         <div className="flex flex-col items-end gap-1">
-                                                            <input
-                                                                type="text"
-                                                                inputMode="decimal"
+                                                            <ManualPriceInput
+                                                                initialValue={leg?.manualCurrentPrice}
                                                                 placeholder={formatNumber(row.fairValue)}
-                                                                value={leg?.manualCurrentPrice !== null && leg?.manualCurrentPrice !== undefined ? formatInputNumber(leg.manualCurrentPrice) : ''}
-                                                                onChange={(e) => {
-                                                                    const val = e.target.value === '' ? null : parseFloat(e.target.value.replace(',', '.'));
-                                                                    // @ts-ignore - manualCurrentPrice is added to OptionLeg but TS might complain if not fully propagated
-                                                                    handleLegChange(row.id, 'manualCurrentPrice', val);
-                                                                }}
+                                                                onChange={(val: number | null) => handleLegChange(row.id, 'manualCurrentPrice', val)}
                                                                 className="w-20 px-2 py-1 text-right text-xs border border-slate-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                                                                 title="Prezzo manuale (lascia vuoto per calcolo automatico)"
                                                             />
