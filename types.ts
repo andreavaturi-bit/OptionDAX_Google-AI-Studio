@@ -5,6 +5,19 @@ export interface UserProfile {
     created_at?: string;
 }
 
+export interface Attachment {
+  id: string;
+  name: string;
+  data: string; // Base64
+  type: string;
+  timestamp: number;
+}
+
+export interface NoteData {
+  text: string;
+  attachments: Attachment[];
+}
+
 export interface OptionLeg {
   id: string; // Changed to string for UUID
   optionType: 'Call' | 'Put';
@@ -22,6 +35,7 @@ export interface OptionLeg {
   currentPrice?: number; // Real-time theoretical price
   currentIv?: number; // Real-time IV
   manualCurrentPrice?: number | null; // User override for current price
+  notes?: NoteData;
 }
 
 export interface MarketData {
@@ -42,6 +56,7 @@ export interface Structure {
     realizedPnl?: number;
     createdAt?: string; // ISO string
     isShared?: boolean; // New field for global sharing
+    notes?: NoteData;
 }
 
 export interface CalculatedGreeks {

@@ -24,6 +24,8 @@ import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import PayoffChart from './PayoffChart';
 import { PlusIcon, TrashIcon, CloudDownloadIcon, CalculatorIcon, ArchiveIcon } from './icons';
+import { StickyNote } from 'lucide-react';
+import NotesDialog from './NotesDialog';
 import ExpiryDateSelector, { findThirdFridayOfMonth } from './ExpiryDateSelector';
 import QuantitySelector from './QuantitySelector';
 import StrikeSelector from './StrikeSelector';
@@ -124,6 +126,8 @@ const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, input
     const [localClosingPrice, setLocalClosingPrice] = useState(formatInputNumber(leg.closingPrice));
     const isTradePriceFocused = useRef(false);
     const isClosingPriceFocused = useRef(false);
+    
+    const [isNotesOpen, setIsNotesOpen] = useState(false);
 
     // Sync from props only when NOT focused
     useEffect(() => {
@@ -213,8 +217,19 @@ const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, input
         position: 'relative' as const,
     };
 
+    const isClosed = leg.closingPrice !== null && leg.closingPrice !== undefined;
+
+    // Calculate BEP for the single leg
+    const bep = useMemo(() => {
+        if (!leg.strike || !leg.tradePrice) return null;
+        // BEP based on premium only (ignoring commissions)
+        const effectivePremium = leg.tradePrice;
+            
+        return leg.optionType === 'Call' ? leg.strike + effectivePremium : leg.strike - effectivePremium;
+    }, [leg.strike, leg.tradePrice, leg.optionType]);
+
     return (
-        <div ref={setNodeRef} style={style} className={`p-4 rounded-xl border bg-white dark:bg-gray-800 border-slate-200 dark:border-gray-600 shadow-sm relative group ${isDragging ? 'shadow-lg ring-2 ring-accent opacity-90' : ''}`}>
+        <div ref={setNodeRef} style={style} className={`p-4 rounded-xl border ${isClosed ? 'bg-slate-200/60 dark:bg-gray-900/60' : 'bg-white dark:bg-gray-800'} border-slate-200 dark:border-gray-600 shadow-sm relative group ${isDragging ? 'shadow-lg ring-2 ring-accent opacity-90' : ''}`}>
             <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center space-x-2">
                     {!isReadOnly && (
@@ -231,6 +246,23 @@ const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, input
                         title={leg.enabled !== false ? "Disabilita Gamba" : "Abilita Gamba"}
                     />
                     <span className={`text-xs font-bold uppercase tracking-widest ${leg.enabled !== false ? 'text-slate-500' : 'text-slate-300 dark:text-gray-600'}`}>Gamba {idx + 1}</span>
+                    
+                    {bep !== null && (
+                        <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 dark:bg-gray-700 rounded-md border border-slate-200 dark:border-gray-600">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">BEP:</span>
+                            <span className="text-[10px] font-mono font-bold text-slate-700 dark:text-gray-200">{formatNumber(bep, 1)}</span>
+                        </div>
+                    )}
+
+                    <button 
+                        onClick={() => setIsNotesOpen(true)}
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all shadow-sm border ${leg.notes?.text || (leg.notes?.attachments?.length || 0) > 0 ? 'bg-accent text-white border-accent' : 'bg-slate-100 dark:bg-gray-700 text-slate-500 dark:text-gray-300 border-slate-200 dark:border-gray-600 hover:bg-slate-200 dark:hover:bg-gray-600'}`}
+                        title="Note & Screenshot"
+                    >
+                        <StickyNote className="w-3.5 h-3.5" />
+                        <span>Note</span>
+                        {(leg.notes?.attachments?.length || 0) > 0 && <span className="bg-white/20 px-1 rounded-full ml-0.5">{leg.notes?.attachments.length}</span>}
+                    </button>
                 </div>
                 {!isReadOnly && (
                     <button onClick={() => removeLeg(leg.id)} className="text-loss opacity-0 group-hover:opacity-100 transition-opacity p-1"><TrashIcon /></button>
@@ -334,6 +366,14 @@ const SortableLegItem = React.memo(({ leg, idx, isReadOnly, simulatedSpot, input
                     </div>
                 </div>
             </div>
+
+            <NotesDialog 
+                isOpen={isNotesOpen}
+                onClose={() => setIsNotesOpen(false)}
+                notes={leg.notes}
+                onSave={(notes) => handleLegChange(leg.id, 'notes', notes)}
+                title={`Gamba ${idx + 1} - ${leg.optionType} ${leg.strike}`}
+            />
         </div>
     );
 });
@@ -380,6 +420,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
 
     // Stati per la conferma in due step
     const [confirmDelete, setConfirmDelete] = useState(false);
+    const [filterMode, setFilterMode] = useState<'all' | 'open' | 'closed'>('all');
     const [confirmClose, setConfirmClose] = useState(false);
 
     const sensors = useSensors(
@@ -463,10 +504,10 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                 if (leg.id === id) {
                     const newLeg = { ...leg, [field]: value };
                     
-                    // Automazione: Se inserisco prezzo chiusura e la data è vuota, metti oggi
+                    // Automazione: Se inserisco prezzo chiusura e la data è vuota, metti oggi (o data chiusura struttura se già chiusa)
                     if (field === 'closingPrice' && value !== '' && value !== null) {
                         if (!newLeg.closingDate) {
-                            newLeg.closingDate = new Date().toISOString().split('T')[0];
+                            newLeg.closingDate = prev.closingDate || new Date().toISOString().split('T')[0];
                         }
                     }
                     
@@ -635,6 +676,28 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
         }
     };
 
+    const filteredLegs = useMemo(() => {
+        if (!localStructure || !localStructure.legs) return [];
+        if (filterMode === 'all') return localStructure.legs;
+        
+        // Cerchiamo la versione "salvata" della struttura per decidere se una gamba è aperta o chiusa.
+        // Questo evita che una gamba sparisca istantaneamente mentre l'utente sta scrivendo il prezzo di chiusura.
+        const persistedStructure = structureId !== 'new' ? structures.find(s => s.id === structureId) : null;
+
+        return localStructure.legs.filter(leg => {
+            const persistedLeg = persistedStructure?.legs.find(l => l.id === leg.id);
+            
+            if (persistedLeg) {
+                // Usiamo lo stato salvato per il filtraggio
+                const isSavedClosed = persistedLeg.closingPrice !== null && persistedLeg.closingPrice !== undefined;
+                return filterMode === 'open' ? !isSavedClosed : isSavedClosed;
+            }
+            
+            // Se la gamba è nuova (non ancora salvata), la consideriamo "Aperta" di default
+            return filterMode === 'open';
+        });
+    }, [localStructure, filterMode, structures, structureId]);
+
     const analysis = useMemo(() => {
         if (!localStructure) return null;
         
@@ -715,7 +778,12 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             acc.gross += curr.grossPnl;
             acc.comm += curr.commissions;
             
-            if (!curr.isClosed) {
+            if (curr.isClosed) {
+                acc.realized += curr.netPnl;
+                acc.realizedPoints += curr.pnlPoints;
+            } else {
+                acc.unrealized += curr.netPnl;
+                acc.unrealizedPoints += curr.pnlPoints;
                 acc.delta += curr.delta;
                 acc.gamma += curr.gamma;
                 acc.theta += curr.theta;
@@ -724,7 +792,12 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                 acc.vegaPoints += curr.vegaPoints;
             }
             return acc;
-        }, { pnl: 0, pnlPoints: 0, gross: 0, comm: 0, delta: 0, gamma: 0, theta: 0, vega: 0, thetaPoints: 0, vegaPoints: 0 });
+        }, { 
+            pnl: 0, pnlPoints: 0, gross: 0, comm: 0, 
+            realized: 0, realizedPoints: 0, 
+            unrealized: 0, unrealizedPoints: 0, 
+            delta: 0, gamma: 0, theta: 0, vega: 0, thetaPoints: 0, vegaPoints: 0 
+        });
 
         // Calculate Global PDC (Net Entry Price in Points)
         // Formula: (Total Net Cash Flow / Multiplier)
@@ -789,7 +862,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
     const isMarketDataValid = marketData.daxSpot > 0 && marketData.daxVolatility > 0;
 
     return (
-        <div className="space-y-6 max-w-[1600px] mx-auto pb-12">
+        <div className="space-y-6 w-full mx-auto pb-12">
             {/* Header */}
             <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
                 <div className="flex items-center space-x-2 md:space-x-4">
@@ -852,8 +925,11 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                 </div>
                 <div className="bg-white dark:bg-gray-800 p-3 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm">
                     <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">PDC Globale</span>
-                    <div className={`text-sm font-mono font-bold mt-1 ${(analysis?.globalPDC || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
-                        {formatNumber(analysis?.globalPDC || 0)}
+                    <div className="text-sm font-mono font-bold mt-1 text-slate-700 dark:text-slate-300">
+                        {formatNumber(Math.abs(analysis?.globalPDC || 0))} 
+                        <span className="text-[10px] ml-1 font-normal text-slate-400">
+                            {(analysis?.globalPDC || 0) >= 0 ? '(Credito)' : '(Debito)'}
+                        </span>
                     </div>
                 </div>
                 <div className="bg-white dark:bg-gray-800 p-3 rounded-xl border border-slate-200 dark:border-gray-700 shadow-sm">
@@ -901,7 +977,29 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                         )}
 
                         <div className="flex justify-between items-center pt-2 border-t border-slate-100 dark:border-gray-700">
-                            <h3 className="text-sm font-bold text-slate-800 dark:text-white">Gambe</h3>
+                            <div className="flex items-center space-x-3">
+                                <h3 className="text-sm font-bold text-slate-800 dark:text-white">Gambe</h3>
+                                <div className="flex bg-slate-100 dark:bg-gray-700 p-0.5 rounded-lg border border-slate-200 dark:border-gray-600">
+                                    <button 
+                                        onClick={() => setFilterMode('all')}
+                                        className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${filterMode === 'all' ? 'bg-white dark:bg-gray-600 text-accent shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                                    >
+                                        TUTTE
+                                    </button>
+                                    <button 
+                                        onClick={() => setFilterMode('open')}
+                                        className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${filterMode === 'open' ? 'bg-white dark:bg-gray-600 text-accent shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                                    >
+                                        APERTE
+                                    </button>
+                                    <button 
+                                        onClick={() => setFilterMode('closed')}
+                                        className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${filterMode === 'closed' ? 'bg-white dark:bg-gray-600 text-accent shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                                    >
+                                        CHIUSE
+                                    </button>
+                                </div>
+                            </div>
                             {!isReadOnly && (
                                 <button 
                                     onClick={sortLegsByDate}
@@ -917,22 +1015,25 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                         </div>
 
                         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                            <SortableContext items={localStructure.legs.map(l => l.id)} strategy={verticalListSortingStrategy}>
+                            <SortableContext items={filteredLegs.map(l => l.id)} strategy={verticalListSortingStrategy}>
                                 <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                                    {localStructure.legs.map((leg, idx) => (
-                                        <SortableLegItem 
-                                            key={leg.id}
-                                            leg={leg}
-                                            idx={idx}
-                                            isReadOnly={isReadOnly}
-                                            simulatedSpot={simulatedSpot}
-                                            inputBaseClass={inputBaseClass}
-                                            labelClass={labelClass}
-                                            handleLegChange={handleLegChange}
-                                            setFairValueAsTradePrice={setFairValueAsTradePrice}
-                                            removeLeg={(id: string) => setLocalStructure({...localStructure, legs: localStructure.legs.filter(l => l.id !== id)})}
-                                        />
-                                    ))}
+                                    {filteredLegs.map((leg) => {
+                                        const originalIdx = localStructure.legs.findIndex(l => l.id === leg.id);
+                                        return (
+                                            <SortableLegItem 
+                                                key={leg.id}
+                                                leg={leg}
+                                                idx={originalIdx}
+                                                isReadOnly={isReadOnly}
+                                                simulatedSpot={simulatedSpot}
+                                                inputBaseClass={inputBaseClass}
+                                                labelClass={labelClass}
+                                                handleLegChange={handleLegChange}
+                                                setFairValueAsTradePrice={setFairValueAsTradePrice}
+                                                removeLeg={(id: string) => setLocalStructure({...localStructure, legs: localStructure.legs.filter(l => l.id !== id)})}
+                                            />
+                                        );
+                                    })}
                                 </div>
                             </SortableContext>
                         </DndContext>
@@ -989,7 +1090,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                             actualMarketSpot={marketData.daxSpot}
                             multiplier={localStructure.multiplier}
                             structureStatus={('status' in localStructure) ? localStructure.status : 'Active'}
-                            realizedPnl={analysis?.totals.pnl}
+                            realizedPnl={0}
                             extraPoints={0}
                             currentPrices={(analysis?.legAnalysis || []).reduce((acc, curr) => ({ ...acc, [curr.id]: curr.currentPrice }), {})}
                             effectiveIvs={(analysis?.legAnalysis || []).reduce((acc, curr) => ({ ...acc, [curr.id]: curr.effectiveIv }), {})}
@@ -1006,32 +1107,32 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                             <div className="px-4 py-3 bg-slate-50 dark:bg-gray-700/50 border-b border-slate-200 dark:border-gray-700">
                                 <h3 className="text-sm font-bold text-slate-800 dark:text-white">Analisi P&L</h3>
                             </div>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-xs text-right">
-                                    <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium">
+                            <div className="overflow-x-auto lg:overflow-x-hidden hover:overflow-x-auto transition-all">
+                                <table className="w-full text-xs text-right border-collapse">
+                                    <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium whitespace-nowrap">
                                         <tr>
-                                            <th className="px-3 py-2 text-left">Gamba</th>
-                                            <th className="px-3 py-2">Prezzo Ape.</th>
-                                            <th className="px-3 py-2">Prezzo Att.</th>
-                                            <th className="px-3 py-2">Punti</th>
-                                            <th className="px-3 py-2">Lordo</th>
-                                            <th className="px-3 py-2">Comm.</th>
-                                            <th className="px-3 py-2">Netto</th>
+                                            <th className="px-2 lg:px-3 py-2 text-left">Gamba</th>
+                                            <th className="px-2 lg:px-3 py-2">Prezzo Ape.</th>
+                                            <th className="px-2 lg:px-3 py-2">Prezzo Att.</th>
+                                            <th className="px-2 lg:px-3 py-2">Punti</th>
+                                            <th className="px-2 lg:px-3 py-2">Lordo</th>
+                                            <th className="px-2 lg:px-3 py-2">Comm.</th>
+                                            <th className="px-2 lg:px-3 py-2">Netto</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-slate-100 dark:divide-gray-700 text-slate-700 dark:text-gray-300">
+                                    <tbody className="divide-y divide-slate-100 dark:divide-gray-700 text-slate-700 dark:text-gray-300 whitespace-nowrap">
                                         {analysis?.legAnalysis.map((row, i) => {
                                             const leg = localStructure.legs.find(l => l.id === row.id);
                                             const isEnabled = leg?.enabled !== false;
                                             return (
                                             <tr key={row.id} className={`${row.isClosed ? 'bg-slate-50/80 dark:bg-gray-900/30 text-slate-400' : ''} ${!isEnabled ? 'opacity-40 line-through decoration-slate-400' : ''}`}>
-                                                <td className="px-3 py-2 text-left font-mono">
+                                                <td className="px-2 lg:px-3 py-2 text-left font-mono">
                                                     #{i + 1} {row.isClosed ? '(Chiusa)' : ''}
                                                 </td>
-                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
+                                                <td className="px-2 lg:px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
                                                     {formatNumber(leg?.tradePrice)}
                                                 </td>
-                                                <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
+                                                <td className="px-2 lg:px-3 py-2 font-mono text-slate-600 dark:text-slate-400">
                                                     {row.isClosed ? (
                                                         formatNumber(row.currentPrice)
                                                     ) : (
@@ -1040,7 +1141,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                                 initialValue={leg?.manualCurrentPrice}
                                                                 placeholder={formatNumber(row.fairValue)}
                                                                 onChange={(val: number | null) => handleLegChange(row.id, 'manualCurrentPrice', val)}
-                                                                className="w-20 px-2 py-1 text-right text-xs border border-slate-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                                                                className="w-16 lg:w-20 px-1 lg:px-2 py-1 text-right text-xs border border-slate-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                                                                 title="Prezzo manuale (lascia vuoto per calcolo automatico)"
                                                             />
                                                             {row.volatilityUsed && isLiveMode && (
@@ -1049,51 +1150,51 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                                                         </div>
                                                     )}
                                                 </td>
-                                                <td className={`px-3 py-2 font-mono ${row.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(row.pnlPoints)}</td>
-                                                <td className={`px-3 py-2 font-mono ${row.grossPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(row.grossPnl)}</td>
-                                                <td className="px-3 py-2 font-mono text-warning">-{formatCurrency(row.commissions)}</td>
-                                                <td className={`px-3 py-2 font-mono font-bold ${row.netPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(row.netPnl)}</td>
+                                                <td className={`px-2 lg:px-3 py-2 font-mono ${row.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(row.pnlPoints)}</td>
+                                                <td className={`px-2 lg:px-3 py-2 font-mono ${row.grossPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(row.grossPnl)}</td>
+                                                <td className="px-2 lg:px-3 py-2 font-mono text-warning">-{formatCurrency(row.commissions)}</td>
+                                                <td className={`px-2 lg:px-3 py-2 font-mono font-bold ${row.netPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(row.netPnl)}</td>
                                             </tr>
                                             );
                                         })}
                                     </tbody>
                                     <tfoot className="bg-slate-50 dark:bg-gray-700/30 font-bold border-t border-slate-200 dark:border-gray-700">
                                         <tr>
-                                            <td className="px-3 py-2 text-left text-slate-500">Realizzato</td>
-                                            <td className="px-3 py-2"></td>
-                                            <td className="px-3 py-2"></td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.realizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.realizedPoints)}</td>
-                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.realizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.realizedPnl)}</td>
+                                            <td className="px-2 lg:px-3 py-2 text-left text-slate-500">Realizzato</td>
+                                            <td className="px-2 lg:px-3 py-2"></td>
+                                            <td className="px-2 lg:px-3 py-2"></td>
+                                            <td className={`px-2 lg:px-3 py-2 font-mono ${(analysis?.totals.realizedPoints || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.totals.realizedPoints)}</td>
+                                            <td colSpan={3} className={`px-2 lg:px-3 py-2 font-mono text-right ${(analysis?.totals.realized || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.realized)}</td>
                                         </tr>
                                         <tr>
-                                            <td className="px-3 py-2 text-left text-slate-500">Non Realizz.</td>
-                                            <td className="px-3 py-2"></td>
-                                            <td className="px-3 py-2"></td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.unrealizedPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.unrealizedPoints)}</td>
-                                            <td colSpan={3} className={`px-3 py-2 font-mono text-right ${analysis?.unrealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.unrealizedPnl)}</td>
+                                            <td className="px-2 lg:px-3 py-2 text-left text-slate-500">Non Realizz.</td>
+                                            <td className="px-2 lg:px-3 py-2"></td>
+                                            <td className="px-2 lg:px-3 py-2"></td>
+                                            <td className={`px-2 lg:px-3 py-2 font-mono ${(analysis?.totals.unrealizedPoints || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.totals.unrealizedPoints)}</td>
+                                            <td colSpan={3} className={`px-2 lg:px-3 py-2 font-mono text-right ${(analysis?.totals.unrealized || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.unrealized)}</td>
                                         </tr>
                                         <tr className="bg-slate-100 dark:bg-gray-700">
-                                            <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totale</td>
-                                            <td className="px-3 py-2"></td>
-                                            <td className="px-3 py-2"></td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.totals.pnlPoints)}</td>
-                                            <td className={`px-3 py-2 font-mono ${analysis?.totals.gross >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.gross)}</td>
-                                            <td className="px-3 py-2 font-mono text-warning">-{formatCurrency(analysis?.totals.comm)}</td>
-                                            <td className={`px-3 py-2 font-mono text-base ${analysis?.totals.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.pnl)}</td>
+                                            <td className="px-2 lg:px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totale</td>
+                                            <td className="px-2 lg:px-3 py-2"></td>
+                                            <td className="px-2 lg:px-3 py-2"></td>
+                                            <td className={`px-2 lg:px-3 py-2 font-mono ${analysis?.totals.pnlPoints >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(analysis?.totals.pnlPoints)}</td>
+                                            <td className={`px-2 lg:px-3 py-2 font-mono ${analysis?.totals.gross >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.gross)}</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-warning">-{formatCurrency(analysis?.totals.comm)}</td>
+                                            <td className={`px-2 lg:px-3 py-2 font-mono font-bold ${analysis?.totals.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(analysis?.totals.pnl)}</td>
                                         </tr>
                                         {/* Global PDC Row */}
                                         <tr className="bg-slate-200 dark:bg-gray-600 border-t border-slate-300 dark:border-gray-500">
-                                            <td colSpan={3} className="px-3 py-2 text-left text-slate-800 dark:text-white font-bold uppercase text-[10px] tracking-wider">
+                                            <td colSpan={3} className="px-2 lg:px-3 py-2 text-left text-slate-800 dark:text-white font-bold uppercase text-[10px] tracking-wider">
                                                 PDC Globale (Punti)
                                                 <span className="block text-[8px] font-normal text-slate-500 dark:text-gray-300 normal-case">
                                                     (Incasso/Costo Netto Totale / Moltiplicatore)
                                                 </span>
                                             </td>
-                                            <td className={`px-3 py-2 font-mono font-bold ${analysis?.globalPDC >= 0 ? 'text-profit' : 'text-loss'}`}>
-                                                {formatNumber(analysis?.globalPDC)}
+                                            <td className="px-2 lg:px-3 py-2 font-mono font-bold text-slate-900 dark:text-white">
+                                                {formatNumber(Math.abs(analysis?.globalPDC || 0))}
                                             </td>
-                                            <td colSpan={3} className="px-3 py-2 text-right text-[10px] text-slate-500 dark:text-gray-400 italic">
-                                                {analysis?.globalPDC >= 0 ? 'Credito Netto' : 'Debito Netto'}
+                                            <td colSpan={3} className="px-2 lg:px-3 py-2 text-right text-[10px] text-slate-600 dark:text-gray-300 font-medium">
+                                                {analysis?.globalPDC >= 0 ? 'CREDITO NETTO' : 'COSTO NETTO'}
                                             </td>
                                         </tr>
                                     </tfoot>
@@ -1107,48 +1208,48 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
                             <div className="px-4 py-3 bg-slate-50 dark:bg-gray-700/50 border-b border-slate-200 dark:border-gray-700">
                                 <h3 className="text-sm font-bold text-slate-800 dark:text-white">Analisi Greche (Gambe Aperte)</h3>
                             </div>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-xs text-right">
-                                    <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium">
+                            <div className="overflow-x-auto lg:overflow-x-hidden hover:overflow-x-auto transition-all">
+                                <table className="w-full text-xs text-right border-collapse">
+                                    <thead className="text-slate-500 bg-slate-50/50 dark:bg-gray-800 dark:text-gray-400 font-medium whitespace-nowrap">
                                         <tr>
-                                            <th className="px-3 py-2 text-left">Gamba</th>
-                                            <th className="px-3 py-2">Delta</th>
-                                            <th className="px-3 py-2">Gamma</th>
-                                            <th className="px-3 py-2">Theta (Pts)</th>
-                                            <th className="px-3 py-2">Theta (€)</th>
-                                            <th className="px-3 py-2">Vega (Pts)</th>
-                                            <th className="px-3 py-2">Vega (€)</th>
+                                            <th className="px-2 lg:px-3 py-2 text-left">Gamba</th>
+                                            <th className="px-2 lg:px-3 py-2">Delta</th>
+                                            <th className="px-2 lg:px-3 py-2">Gamma</th>
+                                            <th className="px-2 lg:px-3 py-2">Theta (Pts)</th>
+                                            <th className="px-2 lg:px-3 py-2">Theta (€)</th>
+                                            <th className="px-2 lg:px-3 py-2">Vega (Pts)</th>
+                                            <th className="px-2 lg:px-3 py-2">Vega (€)</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-slate-100 dark:divide-gray-700 text-slate-700 dark:text-gray-300">
+                                    <tbody className="divide-y divide-slate-100 dark:divide-gray-700 text-slate-700 dark:text-gray-300 whitespace-nowrap">
                                         {analysis?.legAnalysis.filter(l => !l.isClosed).map((row, i) => {
                                             const originalIndex = analysis.legAnalysis.indexOf(row);
                                             const leg = localStructure.legs[originalIndex];
                                             const isEnabled = leg?.enabled !== false;
                                             return (
                                                 <tr key={row.id} className={!isEnabled ? 'opacity-40 line-through decoration-slate-400' : ''}>
-                                                    <td className="px-3 py-2 text-left font-mono truncate max-w-[100px]" title={`${leg.strike} ${leg.optionType}`}>
+                                                    <td className="px-2 lg:px-3 py-2 text-left font-mono truncate max-w-[80px] lg:max-w-[100px]" title={`${leg.strike} ${leg.optionType}`}>
                                                         #{originalIndex + 1} {leg.strike} {leg.optionType.charAt(0)}
                                                     </td>
-                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.delta)}</td>
-                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.gamma, 3)}</td>
-                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.thetaPoints)}</td>
-                                                    <td className="px-3 py-2 font-mono">{formatCurrency(row.theta)}</td>
-                                                    <td className="px-3 py-2 font-mono">{formatNumber(row.vegaPoints)}</td>
-                                                    <td className="px-3 py-2 font-mono">{formatCurrency(row.vega)}</td>
+                                                    <td className="px-2 lg:px-3 py-2 font-mono">{formatNumber(row.delta)}</td>
+                                                    <td className="px-2 lg:px-3 py-2 font-mono">{formatNumber(row.gamma, 3)}</td>
+                                                    <td className="px-2 lg:px-3 py-2 font-mono">{formatNumber(row.thetaPoints)}</td>
+                                                    <td className="px-2 lg:px-3 py-2 font-mono">{formatCurrency(row.theta)}</td>
+                                                    <td className="px-2 lg:px-3 py-2 font-mono">{formatNumber(row.vegaPoints)}</td>
+                                                    <td className="px-2 lg:px-3 py-2 font-mono">{formatCurrency(row.vega)}</td>
                                                 </tr>
                                             );
                                         })}
                                     </tbody>
                                     <tfoot className="bg-slate-100 dark:bg-gray-700 font-bold border-t border-slate-200 dark:border-gray-700">
                                         <tr>
-                                            <td className="px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totali</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.delta)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.gamma, 3)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.thetaPoints)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatCurrency(analysis?.totals.theta)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.vegaPoints)}</td>
-                                            <td className="px-3 py-2 font-mono text-slate-900 dark:text-white">{formatCurrency(analysis?.totals.vega)}</td>
+                                            <td className="px-2 lg:px-3 py-2 text-left text-slate-800 dark:text-white uppercase">Totali</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.delta)}</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.gamma, 3)}</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.thetaPoints)}</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-slate-900 dark:text-white">{formatCurrency(analysis?.totals.theta)}</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-slate-900 dark:text-white">{formatNumber(analysis?.totals.vegaPoints)}</td>
+                                            <td className="px-2 lg:px-3 py-2 font-mono text-slate-900 dark:text-white">{formatCurrency(analysis?.totals.vega)}</td>
                                         </tr>
                                     </tfoot>
                                 </table>

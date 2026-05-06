@@ -7,6 +7,9 @@ import usePortfolioStore from '../store/portfolioStore';
 import useSettingsStore from '../store/settingsStore';
 import { TrendingUpIcon, TrendingDownIcon, ScaleIcon, CheckBadgeIcon, PlusCircleIcon, MinusCircleIcon } from './icons';
 import { formatNumber, formatCurrency, formatPercent } from '../utils/formatters';
+import TradeDurationChart from './TradeDurationChart';
+import { BlackScholes, getYearFraction, getTimeToExpiry } from '../services/blackScholes';
+import { CalculatedGreeks } from '../types';
 
 // Custom Tooltip for Equity Chart
 const CustomEquityTooltip = ({ active, payload }: any) => {
@@ -80,7 +83,7 @@ const getSerial = (tag: string) => {
 };
 
 const PortfolioAnalysis: React.FC = () => {
-    const { structures, setCurrentView } = usePortfolioStore();
+    const { structures, setCurrentView, marketData } = usePortfolioStore();
     const closedStructures = structures.filter(s => s.status === 'Closed');
     const { initialCapital } = useSettingsStore(state => state.settings);
     const [isDarkMode, setIsDarkMode] = useState(false);
@@ -216,11 +219,54 @@ const PortfolioAnalysis: React.FC = () => {
         }));
     }, [closedStructures]);
 
-    if (closedStructures.length === 0) {
+    const activePortfolioGreeks = useMemo(() => {
+        const activeStructures = structures.filter(s => s.status === 'Active');
+        const totals = { delta: 0, gamma: 0, theta: 0, vega: 0 };
+
+        activeStructures.forEach(structure => {
+            structure.legs.forEach(leg => {
+                // If leg is disabled, skip it
+                if (leg.enabled === false) return;
+
+                // If leg is closed, it has no greeks exposure
+                if (leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0) {
+                    return;
+                }
+
+                const timeToExpiry = getTimeToExpiry(leg.expiryDate);
+                if (timeToExpiry <= 0) return;
+
+                // Use current market volatility (VDAX) for active legs calculations
+                const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+
+                const bs = new BlackScholes(
+                    marketData.daxSpot,
+                    leg.strike,
+                    timeToExpiry,
+                    marketData.riskFreeRate,
+                    volatilityToUse
+                );
+
+                const greeks = leg.optionType === 'Call' ? bs.callGreeks() : bs.putGreeks();
+                
+                // Consistently use multiplier for all Greeks to get "index points equivalent" or "Euro equivalent"
+                // This matches the updated StructureListView.tsx logic.
+                const qty = leg.quantity * structure.multiplier;
+                totals.delta += greeks.delta * qty;
+                totals.gamma += greeks.gamma * qty;
+                totals.theta += greeks.theta * qty;
+                totals.vega += greeks.vega * qty;
+            });
+        });
+
+        return totals;
+    }, [structures, marketData]);
+
+    if (structures.length === 0) {
         return (
              <div className="max-w-4xl mx-auto text-center py-10">
                 <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Analisi di Portafoglio</h1>
-                <p className="text-slate-500 dark:text-gray-400">Nessuna struttura chiusa trovata per generare le analisi.</p>
+                <p className="text-slate-500 dark:text-gray-400">Nessuna struttura trovata per generare le analisi.</p>
                  <button onClick={() => setCurrentView('list')} className="mt-6 bg-accent hover:bg-accent/80 text-white font-semibold py-2 px-6 rounded-md transition shadow-lg shadow-accent/20">
                     &larr; Torna alla Lista
                 </button>
@@ -245,7 +291,9 @@ const PortfolioAnalysis: React.FC = () => {
                 </button>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {closedStructures.length > 0 && (
+                <>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 <MetricCard icon={<TrendingUpIcon />} title="P&L Netto Totale" value={formatEuro(keyMetrics.totalNetPnl)} colorClass={keyMetrics.totalNetPnl >= 0 ? 'text-profit' : 'text-loss'} />
                 <MetricCard icon={<ScaleIcon />} title="Profit Factor" value={isFinite(keyMetrics.profitFactor) ? formatNumber(keyMetrics.profitFactor) : '∞'} colorClass={keyMetrics.profitFactor >= 1 ? 'text-profit' : 'text-loss'} />
                 <MetricCard icon={<CheckBadgeIcon />} title="Win Rate" value={formatPercent(keyMetrics.winRate, 1)} colorClass="text-accent"/>
@@ -301,9 +349,15 @@ const PortfolioAnalysis: React.FC = () => {
                                     domain={[finalYMin, yAxisMax]}
                                     allowDataOverflow={true}
                                 />
+                                <YAxis 
+                                    yAxisId="drawdown"
+                                    orientation="right"
+                                    hide
+                                    domain={[keyMetrics.maxDrawdown * 4, 0]}
+                                />
                                 <Tooltip content={<CustomEquityTooltip />} cursor={{ stroke: axisColor, strokeWidth: 1, strokeDasharray: '4 4' }} />
                                 <ReferenceLine y={initialCapital} stroke={axisColor} strokeDasharray="3 3" opacity={0.5} />
-                                <Bar dataKey="drawdown" fill="#ef4444" opacity={0.2} barSize={40} radius={[4, 4, 0, 0]} />
+                                <Bar yAxisId="drawdown" dataKey="drawdown" fill="#ef4444" opacity={0.15} barSize={30} />
                                 <Area 
                                     type="monotone" 
                                     dataKey="equity" 
@@ -344,9 +398,20 @@ const PortfolioAnalysis: React.FC = () => {
                         <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6">Distribuzione per Operazione</h2>
                         <div className="h-[350px]">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={individualPnlData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                <BarChart data={individualPnlData} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
-                                    <XAxis dataKey="name" stroke={axisColor} fontSize={10} interval={0} hide={individualPnlData.length > 15} tickLine={false} axisLine={false} dy={10} />
+                                    <XAxis 
+                                        dataKey="name" 
+                                        stroke={axisColor} 
+                                        fontSize={10} 
+                                        interval={0} 
+                                        hide={individualPnlData.length > 25} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                        angle={-45}
+                                        textAnchor="end"
+                                        dy={10}
+                                    />
                                     <YAxis stroke={axisColor} fontSize={12} tickFormatter={currencyFormatter} width={60} tickLine={false} axisLine={false} />
                                     <Tooltip content={<CustomPnlTooltip />} cursor={{ fill: isDarkMode ? 'rgba(55, 65, 81, 0.5)' : 'rgba(241, 245, 249, 0.8)' }}/>
                                     <ReferenceLine y={0} stroke={axisColor} />
@@ -360,6 +425,12 @@ const PortfolioAnalysis: React.FC = () => {
                         </div>
                     </div>
                 </div>
+            </div>
+        </>
+    )}
+
+            <div className="w-full">
+                <TradeDurationChart structures={structures} isDarkMode={isDarkMode} />
             </div>
         </div>
     );

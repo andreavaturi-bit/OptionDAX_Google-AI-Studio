@@ -64,6 +64,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
           realizedPnl: s.realized_pnl,
           createdAt: s.created_at,
           isShared: s.is_shared, // Map new column
+          notes: s.notes,
           legs: (s.legs || []).map((l: any) => ({
             id: l.id,
             optionType: l.option_type,
@@ -77,7 +78,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
             impliedVolatility: l.implied_volatility,
             openingCommission: l.opening_commission,
             closingCommission: l.closing_commission,
-            manualCurrentPrice: l.manual_current_price
+            manualCurrentPrice: l.manual_current_price,
+            notes: l.notes
           }))
         }));
         set({ structures: normalized as Structure[] });
@@ -112,6 +114,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
               realizedPnl: s.realized_pnl,
               createdAt: s.created_at,
               isShared: s.is_shared,
+              notes: s.notes,
               legs: (s.legs || []).map((l: any) => ({
                 id: l.id,
                 optionType: l.option_type,
@@ -125,7 +128,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                 impliedVolatility: l.implied_volatility,
                 openingCommission: l.opening_commission,
                 closingCommission: l.closing_commission,
-                manualCurrentPrice: l.manual_current_price
+                manualCurrentPrice: l.manual_current_price,
+                notes: l.notes
               }))
             })) as Structure[];
         }
@@ -163,7 +167,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                 tag: `${original.tag} (Imported)`,
                 multiplier: original.multiplier,
                 status: 'Active', // Always import as active
-                user_id: user.id
+                user_id: user.id,
+                notes: original.notes
             }])
             .select()
             .single();
@@ -189,7 +194,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                 implied_volatility: leg.implied_volatility,
                 opening_commission: leg.opening_commission,
                 closing_commission: leg.closing_commission,
-                manual_current_price: leg.manual_current_price
+                manual_current_price: leg.manual_current_price,
+                notes: leg.notes
             }));
             
             const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
@@ -221,7 +227,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         multiplier: newStructure.multiplier, 
         status: 'Active', 
         user_id: user.id,
-        is_shared: newStructure.isShared || false
+        is_shared: newStructure.isShared || false,
+        notes: newStructure.notes
       }])
       .select()
       .single();
@@ -243,7 +250,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         implied_volatility: leg.impliedVolatility,
         opening_commission: leg.openingCommission,
         closing_commission: leg.closingCommission,
-        manual_current_price: leg.manualCurrentPrice
+        manual_current_price: leg.manualCurrentPrice,
+        notes: leg.notes
       }));
       const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
       if (legsError) throw legsError;
@@ -264,7 +272,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         status: updatedStructure.status,
         closing_date: updatedStructure.closingDate,
         realized_pnl: updatedStructure.realizedPnl,
-        is_shared: updatedStructure.isShared || false
+        is_shared: updatedStructure.isShared || false,
+        notes: updatedStructure.notes
       })
       .eq('id', updatedStructure.id);
 
@@ -287,7 +296,8 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         implied_volatility: leg.impliedVolatility,
         opening_commission: leg.openingCommission,
         closing_commission: leg.closingCommission,
-        manual_current_price: leg.manualCurrentPrice
+        manual_current_price: leg.manualCurrentPrice,
+        notes: leg.notes
       }));
       const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
       if (legsError) throw legsError;

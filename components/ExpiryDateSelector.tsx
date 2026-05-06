@@ -155,11 +155,18 @@ const ExpiryDateSelector: React.FC<ExpiryDateSelectorProps> = ({ value, onChange
         >
             {displayGroups.map(group => (
                 <optgroup key={group.monthLabel} label={group.monthLabel}>
-                    {group.options.map(option => (
-                        <option key={option.value} value={option.value}>
-                            {option.label}
-                        </option>
-                    ))}
+                    {group.options.map(option => {
+                        const isPast = new Date(option.value).getTime() < new Date().setHours(0,0,0,0);
+                        return (
+                            <option 
+                                key={option.value} 
+                                value={option.value}
+                                className={isPast ? 'bg-slate-100 text-slate-400 dark:bg-gray-700/50 dark:text-gray-500' : ''}
+                            >
+                                {option.label}
+                            </option>
+                        );
+                    })}
                 </optgroup>
             ))}
         </select>

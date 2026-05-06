@@ -65,20 +65,36 @@ export class BlackScholes {
     // This scales the result to show the change in delta for a 1% move in the spot price, which is a more readable convention.
     // The formula simplifies from (N'(d1)/(S*σ*√T)) * (S/100) to N'(d1)/(100*σ*√T).
     const gamma = normPdf(this.d1) / (100 * this.sigma * Math.sqrt(this.T));
-    const theta = -((this.S * normPdf(this.d1) * this.sigma) / (2 * Math.sqrt(this.T))) - (this.r * this.K * Math.exp(-this.r * this.T) * normCdf(this.d2));
+    const thetaRaw = -((this.S * normPdf(this.d1) * this.sigma) / (2 * Math.sqrt(this.T))) - (this.r * this.K * Math.exp(-this.r * this.T) * normCdf(this.d2));
     const vega = this.S * Math.sqrt(this.T) * normPdf(this.d1);
     
-    return { delta, gamma, theta: theta / 365, vega: vega / 100 };
+    const dailyTheta = thetaRaw / 365;
+    const price = this.callPrice();
+    const intrinsic = Math.max(0, this.S - this.K);
+    const extrinsic = Math.max(0, price - intrinsic);
+    
+    // Capped Theta: daily decay cannot exceed total remaining extrinsic value
+    const cappedTheta = Math.max(dailyTheta, -extrinsic);
+    
+    return { delta, gamma, theta: cappedTheta, vega: vega / 100 };
   }
 
   putGreeks(): { delta: number, gamma: number, theta: number, vega: number } {
     const delta = normCdf(this.d1) - 1;
     // FIX: Apply the same scaling to put gamma for consistency.
     const gamma = normPdf(this.d1) / (100 * this.sigma * Math.sqrt(this.T));
-    const theta = -((this.S * normPdf(this.d1) * this.sigma) / (2 * Math.sqrt(this.T))) + (this.r * this.K * Math.exp(-this.r * this.T) * normCdf(-this.d2));
+    const thetaRaw = -((this.S * normPdf(this.d1) * this.sigma) / (2 * Math.sqrt(this.T))) + (this.r * this.K * Math.exp(-this.r * this.T) * normCdf(-this.d2));
     const vega = this.S * Math.sqrt(this.T) * normPdf(this.d1);
 
-    return { delta, gamma, theta: theta / 365, vega: vega / 100 };
+    const dailyTheta = thetaRaw / 365;
+    const price = this.putPrice();
+    const intrinsic = Math.max(0, this.K - this.S);
+    const extrinsic = Math.max(0, price - intrinsic);
+    
+    // Capped Theta: daily decay cannot exceed total remaining extrinsic value
+    const cappedTheta = Math.max(dailyTheta, -extrinsic);
+
+    return { delta, gamma, theta: cappedTheta, vega: vega / 100 };
   }
 }
 

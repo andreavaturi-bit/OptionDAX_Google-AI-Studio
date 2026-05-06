@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import usePortfolioStore from '../store/portfolioStore';
 import { Structure, MarketData, CalculatedGreeks, Settings } from '../types';
-import { BlackScholes, getTimeToExpiry } from '../services/blackScholes';
+import { BlackScholes, getTimeToExpiry, calculateImpliedVolatility } from '../services/blackScholes';
 import { calculateStructureMargin } from '../utils/marginCalculator';
 import MarginGauge from './MarginGauge';
 import { PlusIcon, PortfolioIcon, TrashIcon, CloudDownloadIcon, ArchiveIcon } from './icons';
@@ -24,8 +24,12 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, ListFilter, Calendar, Hash, ArrowUpDown, ArrowUp, ArrowDown, Euro } from 'lucide-react';
+import { GripVertical, ListFilter, Calendar, Hash, ArrowUpDown, ArrowUp, ArrowDown, Euro, StickyNote } from 'lucide-react';
+import NotesDialog from './NotesDialog';
 import { formatNumber, formatCurrency, formatPercent, formatInputNumber } from '../utils/formatters';
+import { motion, AnimatePresence } from 'motion/react';
+import GreeksIntensity from './GreeksIntensity';
+import { Compass } from 'lucide-react';
 
 // ... (keep existing helper functions like calculateTotalGreeks, calculateUnrealizedPnlForStructure, getMultiplierLabel)
 
@@ -37,17 +41,33 @@ const calculateTotalGreeks = (structure: Structure, marketData: MarketData): Cal
         if (leg.enabled === false) return acc;
 
         // If leg is closed, it has no greeks exposure
-        if (leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0) {
+        const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined;
+        if (isLegClosed) {
             return acc;
         }
 
         const timeToExpiry = getTimeToExpiry(leg.expiryDate);
         // Use current market volatility (VDAX) for active legs calculations
-        const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+        let volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
         
+        // Calculate Effective IV if there's a manual price
+        if (leg.manualCurrentPrice !== null && leg.manualCurrentPrice !== undefined) {
+            const solvedIv = calculateImpliedVolatility(
+                leg.manualCurrentPrice,
+                marketData.daxSpot,
+                leg.strike,
+                timeToExpiry,
+                marketData.riskFreeRate,
+                leg.optionType
+            );
+            if (solvedIv !== null && !isNaN(solvedIv) && solvedIv > 0) {
+                volatilityToUse = solvedIv;
+            }
+        }
+
         const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
         const greeks = leg.optionType === 'Call' ? bs.callGreeks() : bs.putGreeks();
-        acc.delta += greeks.delta * leg.quantity;
+        acc.delta += greeks.delta * leg.quantity * 100; // Scaled by 100 to match Detail View
         acc.gamma += greeks.gamma * leg.quantity;
         acc.theta += greeks.theta * leg.quantity; 
         acc.vega += greeks.vega * leg.quantity;   
@@ -61,7 +81,8 @@ const calculatePnlInfoForStructure = (structure: Structure, marketData: MarketDa
         if (leg.enabled === false) return acc;
 
         // Check if specifically this leg is closed (has closing price)
-        const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined && Number(leg.closingPrice) !== 0;
+        // BUG FIX: Ensure we use the closing price even if it's 0 (expired or closed at 0)
+        const isLegClosed = leg.closingPrice !== null && leg.closingPrice !== undefined;
         
         let currentPrice = 0;
         
@@ -72,8 +93,11 @@ const calculatePnlInfoForStructure = (structure: Structure, marketData: MarketDa
         } else {
             const timeToExpiry = getTimeToExpiry(leg.expiryDate);
             if (timeToExpiry > 0) {
-                // Use current market volatility (VDAX) for active legs calculations
-                const volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+                // BUG FIX: Use the same volatility solving logic as Detail View for more precision
+                let volatilityToUse = marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility;
+                
+                // If there's a manual price for some legs but not others, or if we want to be hyper-precise,
+                // but here it's simple: if no manual price, use VDAX.
                 
                 const bs = new BlackScholes(marketData.daxSpot, leg.strike, timeToExpiry, marketData.riskFreeRate, volatilityToUse);
                 currentPrice = leg.optionType === 'Call' ? bs.callPrice() : bs.putPrice();
@@ -192,7 +216,14 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
 
     // Calculate Margin for this structure
     const { settings } = useSettingsStore();
+    const { updateStructure } = usePortfolioStore();
     const margin = calculateStructureMargin(structure, marketData, settings);
+    
+    const [isNotesOpen, setIsNotesOpen] = useState(false);
+
+    const handleSaveNotes = (notes: any) => {
+        updateStructure({ ...structure, notes });
+    };
 
     // Format creation date
     const creationDate = structure.createdAt 
@@ -263,6 +294,18 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
                                     <Calendar className="w-3 h-3" /> {creationDate}
                                 </span>
                             )}
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsNotesOpen(true);
+                                }}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all shadow-sm border ${structure.notes?.text || (structure.notes?.attachments?.length || 0) > 0 ? 'bg-accent text-white border-accent' : 'bg-slate-100 dark:bg-gray-800 text-slate-400 dark:text-gray-500 border-slate-200 dark:border-gray-700 hover:bg-slate-200 dark:hover:bg-gray-700'}`}
+                                title="Note & Screenshot"
+                            >
+                                <StickyNote className="w-3.5 h-3.5" />
+                                <span>Note</span>
+                                {(structure.notes?.attachments?.length || 0) > 0 && <span className="bg-white/20 px-1 rounded-full ml-0.5">{structure.notes?.attachments.length}</span>}
+                            </button>
                         </div>
                     </div>
 
@@ -312,6 +355,14 @@ const SortableStructureItem: React.FC<SortableStructureItemProps> = ({
                     </div>
                 </div>
             </div>
+
+            <NotesDialog 
+                isOpen={isNotesOpen}
+                onClose={() => setIsNotesOpen(false)}
+                notes={structure.notes}
+                onSave={handleSaveNotes}
+                title={structure.tag || 'Struttura'}
+            />
         </div>
     );
 };
@@ -329,6 +380,18 @@ const StructureListView: React.FC = () => {
     const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
     const [customOrder, setCustomOrder] = useState<string[]>([]);
     const [isVdaxFocused, setIsVdaxFocused] = useState(false);
+    const [showGreeksVisual, setShowGreeksVisual] = useState(false);
+    const [isDarkMode, setIsDarkMode] = useState(false);
+
+    useEffect(() => {
+        const checkTheme = () => {
+            setIsDarkMode(document.documentElement.classList.contains('dark'));
+        };
+        checkTheme();
+        const observer = new MutationObserver(checkTheme);
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        return () => observer.disconnect();
+    }, []);
     const [marginBase, setMarginBase] = useState<'initial' | 'current'>('initial');
 
     const activeStructures = useMemo(() => structures.filter(s => s.status === 'Active'), [structures]);
@@ -516,11 +579,22 @@ const StructureListView: React.FC = () => {
     }, [selectedIds, deleteStructures]);
 
     const totalPortfolioGreeks = useMemo(() => {
-        const initialGreeks = { delta: 0, gamma: 0, theta: 0, vega: 0, thetaPoints: 0, vegaPoints: 0 };
+        const initialGreeks = { 
+            delta: 0, 
+            gamma: 0, 
+            theta: 0, 
+            vega: 0, 
+            thetaPoints: 0, 
+            vegaPoints: 0,
+            deltaTotal: 0,
+            gammaTotal: 0
+        };
         return activeStructures.reduce((acc, structure) => {
             const structureGreeks = calculateTotalGreeks(structure, marketData);
             acc.delta += structureGreeks.delta;
             acc.gamma += structureGreeks.gamma;
+            acc.deltaTotal += (structureGreeks.delta / 100) * structure.multiplier;
+            acc.gammaTotal += structureGreeks.gamma * structure.multiplier;
             acc.theta += structureGreeks.theta * structure.multiplier;
             acc.vega += structureGreeks.vega * structure.multiplier;
             acc.thetaPoints += structureGreeks.theta;
@@ -530,14 +604,14 @@ const StructureListView: React.FC = () => {
     }, [activeStructures, marketData]);
     
     const totalPortfolioPnlInfo = useMemo(() => {
-        return activeStructures.reduce((acc, structure) => {
+        return structures.reduce((acc, structure) => {
             const info = calculatePnlInfoForStructure(structure, marketData);
             return {
                 netPnl: acc.netPnl + info.netPnl,
                 totalPoints: acc.totalPoints + info.totalPoints
             };
         }, { netPnl: 0, totalPoints: 0 });
-    }, [activeStructures, marketData]);
+    }, [structures, marketData]);
 
     const totalOccupiedMargin = useMemo(() => {
         return activeStructures.reduce((acc, structure) => {
@@ -545,16 +619,9 @@ const StructureListView: React.FC = () => {
         }, 0);
     }, [activeStructures, marketData, settings]);
 
-    const currentCapital = useMemo(() => {
-        const realizedPnl = structures
-            .filter(s => s.status === 'Closed')
-            .reduce((acc, s) => acc + (s.realizedPnl || 0), 0);
-        return (Number(settings.initialCapital) || 0) + realizedPnl;
-    }, [structures, settings.initialCapital]);
-
     const totalCapitalWithOpenPnl = useMemo(() => {
-        return currentCapital + totalPortfolioPnlInfo.netPnl;
-    }, [currentCapital, totalPortfolioPnlInfo.netPnl]);
+        return (Number(settings.initialCapital) || 0) + totalPortfolioPnlInfo.netPnl;
+    }, [settings.initialCapital, totalPortfolioPnlInfo.netPnl]);
 
     const selectedCapital = marginBase === 'initial' ? (Number(settings.initialCapital) || 0) : totalCapitalWithOpenPnl;
 
@@ -576,7 +643,18 @@ const StructureListView: React.FC = () => {
                     <div className="flex flex-wrap gap-y-4 justify-between items-center mb-6">
                         <div className="flex items-center space-x-3">
                             <div className="text-slate-600 dark:text-gray-200"><PortfolioIcon /></div>
-                            <h1 className="text-xl font-bold text-slate-900 dark:text-white">Metriche di Portafoglio (Strutture Attive)</h1>
+                            <h1 className="text-xl font-bold text-slate-900 dark:text-white">Metriche Globali di Portafoglio</h1>
+                            <button 
+                                onClick={() => setShowGreeksVisual(!showGreeksVisual)}
+                                className={`ml-2 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    showGreeksVisual 
+                                        ? 'bg-accent text-white shadow-md' 
+                                        : 'bg-slate-100 dark:bg-gray-700 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-600 border border-slate-200 dark:border-gray-600'
+                                }`}
+                            >
+                                <Compass className={`w-4 h-4 ${showGreeksVisual ? 'animate-pulse' : ''}`} />
+                                <span>{showGreeksVisual ? 'Nascondi Analisi Greche' : 'Analisi Greche'}</span>
+                            </button>
                         </div>
                         <div className="flex items-center space-x-4">
                             <div className="text-right hidden sm:block">
@@ -641,7 +719,7 @@ const StructureListView: React.FC = () => {
                         <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
                             {[
                                 { 
-                                    label: 'P/L Aperto', 
+                                    label: 'Risultato Totale (P&L)', 
                                     val: (
                                         <div className="flex flex-col">
                                             <span className="truncate">{formatCurrency(totalPortfolioPnlInfo.netPnl)}</span>
@@ -655,27 +733,45 @@ const StructureListView: React.FC = () => {
                                     val: formatCurrency(totalOccupiedMargin), 
                                     color: 'text-amber-600 dark:text-amber-400' 
                                 },
-                                { label: 'Delta (Δ)', val: formatNumber(totalPortfolioGreeks.delta), color: 'text-slate-900 dark:text-white' },
-                                { label: 'Gamma (Γ)', val: formatNumber(totalPortfolioGreeks.gamma, 3), color: 'text-slate-900 dark:text-white' },
+                                { 
+                                    label: 'Delta (Δ)', 
+                                    val: (
+                                        <div className="flex flex-col">
+                                            <span className="truncate">{formatNumber(totalPortfolioGreeks.delta)}</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioGreeks.deltaTotal > 0 ? '+' : ''}{formatNumber(totalPortfolioGreeks.deltaTotal)} units</span>
+                                        </div>
+                                    ),
+                                    color: 'text-slate-900 dark:text-white' 
+                                },
+                                { 
+                                    label: 'Gamma (Γ)', 
+                                    val: (
+                                        <div className="flex flex-col">
+                                            <span className="truncate">{formatNumber(totalPortfolioGreeks.gamma, 3)}</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{totalPortfolioGreeks.gammaTotal > 0 ? '+' : ''}{formatNumber(totalPortfolioGreeks.gammaTotal, 3)} units</span>
+                                        </div>
+                                    ),
+                                    color: 'text-slate-900 dark:text-white' 
+                                },
                                 { 
                                     label: 'Theta (Θ)', 
                                     val: (
                                         <div className="flex flex-col">
-                                            <span className="truncate">{formatCurrency(totalPortfolioGreeks.theta)}</span>
-                                            <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.thetaPoints)} pts</span>
+                                            <span className={`truncate ${totalPortfolioGreeks.theta >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(totalPortfolioGreeks.thetaPoints, 1)} pts</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{formatCurrency(totalPortfolioGreeks.theta)}/gg</span>
                                         </div>
                                     ),
-                                    color: totalPortfolioGreeks.theta >= 0 ? 'text-profit' : 'text-loss' 
+                                    color: 'text-slate-900 dark:text-white' 
                                 },
                                 { 
                                     label: 'Vega (ν)', 
                                     val: (
                                         <div className="flex flex-col">
-                                            <span className="truncate">{formatCurrency(totalPortfolioGreeks.vega)}</span>
-                                            <span className="text-[10px] md:text-xs opacity-80">{formatNumber(totalPortfolioGreeks.vegaPoints)} pts</span>
+                                            <span className={`truncate ${totalPortfolioGreeks.vega >= 0 ? 'text-profit' : 'text-loss'}`}>{formatNumber(totalPortfolioGreeks.vegaPoints, 1)} pts</span>
+                                            <span className="text-[10px] md:text-xs opacity-80">{formatCurrency(totalPortfolioGreeks.vega)}/1%</span>
                                         </div>
                                     ),
-                                    color: totalPortfolioGreeks.vega >= 0 ? 'text-profit' : 'text-loss' 
+                                    color: 'text-slate-900 dark:text-white' 
                                 }
                             ].map((metric, i) => (
                                 <div key={i} className="bg-slate-50 dark:bg-gray-900/50 p-3 md:p-4 rounded-xl border border-slate-200 dark:border-gray-700/50">
@@ -704,6 +800,20 @@ const StructureListView: React.FC = () => {
                             </div>
                         </div>
                     </div>
+
+                    <AnimatePresence>
+                        {showGreeksVisual && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                                animate={{ height: 'auto', opacity: 1, marginTop: 24 }}
+                                exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                                className="overflow-hidden border-t border-slate-100 dark:border-gray-700 pt-6"
+                            >
+                                <GreeksIntensity greeks={totalPortfolioGreeks} isDarkMode={isDarkMode} />
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
             )}
 

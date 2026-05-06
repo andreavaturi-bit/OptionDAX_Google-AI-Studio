@@ -1,5 +1,5 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { 
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, 
     ResponsiveContainer, ReferenceLine, ReferenceDot 
@@ -35,9 +35,14 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
     closedPrices,
     legCommissions
 }) => {
-    const [viewRange, setViewRange] = useState<number>(20); 
+    const [viewRange, setViewRange] = useState<number>(10); 
     const [simTimePercent, setSimTimePercent] = useState<number>(0); 
     const [isDarkMode, setIsDarkMode] = useState(false);
+    const [panOffset, setPanOffset] = useState<number>(0);
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragStartX, setDragStartX] = useState<number | null>(null);
+    
+    const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         const checkTheme = () => setIsDarkMode(document.documentElement.classList.contains('dark'));
@@ -48,26 +53,39 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
     }, []);
 
     const earliestExpiryDate = useMemo(() => {
-        // Filter only open legs (those not in closedPrices)
+        const now = new Date();
+        now.setHours(0, 0, 0, 0); // Start of today to avoid minor timing issues
+        const nowTime = now.getTime();
+        
+        // Find legs that are still open
         const openLegs = legs.filter(l => !closedPrices || closedPrices[l.id] === undefined);
         
-        if (openLegs.length === 0) {
-            // If no open legs, use the earliest expiry of all legs (or today if none)
-            if (legs.length === 0) return new Date();
-            const allDates = legs.map(l => {
-                const d = new Date(l.expiryDate);
-                d.setHours(13, 0, 0, 0);
-                return d.getTime();
-            });
-            return new Date(Math.min(...allDates));
-        }
-
-        const dates = openLegs.map(l => {
+        // Prioritize the nearest FUTURE expiry among open legs
+        const futureOpenLegs = openLegs.filter(l => {
             const d = new Date(l.expiryDate);
-            d.setHours(13, 0, 0, 0); // DAX options expire at 13:00
+            d.setHours(13, 0, 0, 0);
+            return d.getTime() > nowTime;
+        });
+
+        // Use the nearest future open leg if available
+        // If none, fallback to nearest open leg regardless of date
+        // If no open legs, fallback to all legs
+        let targetLegs = futureOpenLegs.length > 0 ? futureOpenLegs : openLegs;
+        if (targetLegs.length === 0) targetLegs = legs;
+
+        if (targetLegs.length === 0) return new Date();
+
+        const dates = targetLegs.map(l => {
+            const d = new Date(l.expiryDate);
+            d.setHours(13, 0, 0, 0);
             return d.getTime();
         });
-        return new Date(Math.min(...dates));
+        
+        // Filter out past dates for the anchor IF there are future dates available
+        const futureDates = dates.filter(d => d > nowTime);
+        const anchorDate = futureDates.length > 0 ? Math.min(...futureDates) : Math.min(...dates);
+        
+        return new Date(anchorDate);
     }, [legs, closedPrices]);
 
     const chartPoints = useMemo(() => {
@@ -75,8 +93,8 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
         
         if (legs.length === 0) {
             const range = currentSpot * (viewRange / 100);
-            const xMin = Math.floor(currentSpot - range);
-            const xMax = Math.ceil(currentSpot + range);
+            const xMin = Math.floor(currentSpot - range + panOffset);
+            const xMax = Math.ceil(currentSpot + range + panOffset);
             const step = (xMax - xMin) / 100;
             return Array.from({ length: 101 }, (_, i) => xMin + i * step);
         }
@@ -95,8 +113,8 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
         
         const padding = minPadding + (maxPadding - minPadding) * expansionFactor;
 
-        const xMin = Math.floor(minStrike - padding);
-        const xMax = Math.ceil(maxStrike + padding);
+        const xMin = Math.floor(minStrike - padding + panOffset);
+        const xMax = Math.ceil(maxStrike + padding + panOffset);
 
         const pointCount = 150;
         const step = (xMax - xMin) / pointCount;
@@ -122,7 +140,7 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
         }
 
         return uniquePoints;
-    }, [legs, marketData.daxSpot, viewRange]);
+    }, [legs, marketData.daxSpot, viewRange, panOffset]);
 
 
     const data = useMemo(() => {
@@ -165,14 +183,13 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
                     ? effectiveIvs[leg.id] 
                     : (marketData.daxVolatility > 0 ? marketData.daxVolatility : leg.impliedVolatility);
                 
-                const commissions = legCommissions?.[leg.id] || 0;
-                totalCommissions += commissions;
-
                 const closedPrice = closedPrices?.[leg.id];
+                const comm = legCommissions?.[leg.id] || 0;
+                totalCommissions += comm;
 
                 let valAtExpiry = 0;
                 if (closedPrice !== undefined) {
-                    valAtExpiry = closedPrice;
+                    valAtExpiry = Number(closedPrice);
                 } else if (isExpiringLeg) {
                     valAtExpiry = leg.optionType === 'Call'
                         ? Math.max(0, spot - leg.strike)
@@ -189,7 +206,7 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
                 // Simulated P&L (T+now + simTime)
                 let valSim = 0;
                 if (closedPrice !== undefined) {
-                    valSim = closedPrice;
+                    valSim = Number(closedPrice);
                 } else {
                     const t_sim = Math.max(0.000001, t_total_leg - t_elapsed);
                     const bsSim = new BlackScholes(spot, leg.strike, t_sim, marketData.riskFreeRate, vol);
@@ -201,8 +218,8 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
 
             return {
                 spot,
-                pnlExpiry: pnlAtFirstExpiryPoints * multiplier - totalCommissions,
-                pnlSim: pnlSimulatedPoints * multiplier - totalCommissions
+                pnlExpiry: (pnlAtFirstExpiryPoints * multiplier) - totalCommissions,
+                pnlSim: (pnlSimulatedPoints * multiplier) - totalCommissions
             };
         });
     }, [chartPoints, legs, earliestExpiryDate, marketData, simTimePercent, multiplier, structureStatus, realizedPnl, extraPoints, effectiveIvs, closedPrices, legCommissions]);
@@ -244,6 +261,42 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
         const simMs = now.getTime() + (totalMs * (simTimePercent / 100));
         return new Date(simMs);
     }, [earliestExpiryDate, simTimePercent]);
+
+    // Calculate Break Even Points (BEP)
+    const bepData = useMemo(() => {
+        if (data.length < 2) return { expiry: [], sim: [] };
+
+        const findCrossings = (key: 'pnlExpiry' | 'pnlSim') => {
+            const crossings: number[] = [];
+            for (let i = 0; i < data.length - 1; i++) {
+                const p1 = data[i];
+                const p2 = data[i + 1];
+                
+                // Check if PnL crosses zero
+                if ((p1[key] <= 0 && p2[key] > 0) || (p1[key] >= 0 && p2[key] < 0)) {
+                    // Linear interpolation to find the exact spot where PnL is zero
+                    // y = y1 + (x - x1) * (y2 - y1) / (x2 - x1)
+                    // 0 = y1 + (x - x1) * (y2 - y1) / (x2 - x1)
+                    // x = x1 - y1 * (x2 - x1) / (y2 - y1)
+                    const x1 = p1.spot;
+                    const x2 = p2.spot;
+                    const y1 = p1[key];
+                    const y2 = p2[key];
+                    
+                    if (Math.abs(y2 - y1) > 0.000001) {
+                        const zeroX = x1 - y1 * (x2 - x1) / (y2 - y1);
+                        crossings.push(zeroX);
+                    }
+                }
+            }
+            return crossings;
+        };
+
+        return {
+            expiry: findCrossings('pnlExpiry'),
+            sim: findCrossings('pnlSim')
+        };
+    }, [data]);
 
     const formatSimDate = (date: Date) => {
         return date.toLocaleString('it-IT', { 
@@ -287,6 +340,40 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
         return null;
     };
     
+    const handleMouseDown = (e: React.MouseEvent) => {
+        setIsDragging(true);
+        setDragStartX(e.clientX);
+    };
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+        if (!isDragging || dragStartX === null || !containerRef.current) return;
+
+        const dx = e.clientX - dragStartX;
+        const containerWidth = containerRef.current.clientWidth;
+        
+        // Calculate the current visible range in points
+        const xMin = chartPoints[0];
+        const xMax = chartPoints[chartPoints.length - 1];
+        const rangePoints = xMax - xMin;
+        
+        // Points per pixel
+        const pointsPerPixel = rangePoints / containerWidth;
+        
+        // Update pan offset (inverted because dragging the chart right means moving the view left)
+        setPanOffset(prev => prev - (dx * pointsPerPixel));
+        setDragStartX(e.clientX);
+    };
+
+    const handleMouseUp = () => {
+        setIsDragging(false);
+        setDragStartX(null);
+    };
+
+    const handleReset = () => {
+        setViewRange(10);
+        setPanOffset(0);
+    };
+
     const gradientIdSim = `splitColorSim-${gradientOffsetSim.toFixed(4)}`;
     const gradientIdExp = `splitColorExp-${gradientOffsetExp.toFixed(4)}`;
 
@@ -309,16 +396,27 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
                         <span className="text-[10px] font-mono font-bold text-[#3b82f6] whitespace-nowrap">
                             {simTimePercent === 0 ? 'T+0 (Ora)' : simTimePercent === 100 ? 'EXP (Scadenza)' : formatSimDate(simulatedDate)}
                         </span>
-                        <div className="flex items-center justify-between w-full">
+                        <div className="flex items-center justify-end w-full">
                             <span className="text-[9px] text-slate-400 font-mono">
                                 {simTimePercent}%
                             </span>
-                            <span className="text-[8px] text-blue-300 font-mono ml-2">v2</span>
                         </div>
                      </div>
                  </div>
                  
                  <div className="flex items-center space-x-3 text-[10px]">
+                    {bepData.expiry.length > 0 && (
+                        <div className="flex items-center bg-blue-50 dark:bg-blue-900/20 px-2 py-1 rounded border border-blue-100 dark:border-blue-800">
+                            <span className="text-blue-500 font-bold mr-1">BEP Exp:</span>
+                            <span className="text-blue-700 dark:text-blue-300 font-mono">{bepData.expiry.map(b => formatNumber(b, 0)).join(' | ')}</span>
+                        </div>
+                    )}
+                    {structureStatus !== 'Closed' && bepData.sim.length > 0 && (
+                        <div className="flex items-center bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded border border-emerald-100 dark:border-emerald-800">
+                            <span className="text-emerald-500 font-bold mr-1">BEP Now:</span>
+                            <span className="text-emerald-700 dark:text-emerald-300 font-mono">{bepData.sim.map(b => formatNumber(b, 0)).join(' | ')}</span>
+                        </div>
+                    )}
                     <div className="flex items-center"><span className="w-2 h-2 rounded-full bg-profit mr-1"></span> Profit</div>
                     <div className="flex items-center"><span className="w-2 h-2 rounded-full bg-loss mr-1"></span> Loss</div>
                  </div>
@@ -332,11 +430,19 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
             )}
 
             {/* Chart Area */}
-            <div className="flex-1 relative min-h-0">
+            <div 
+                ref={containerRef}
+                className={`flex-1 relative min-h-0 select-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+            >
                 <ResponsiveContainer width="100%" height="100%">
                     <AreaChart 
                         data={data} 
                         margin={{ top: 20, right: 10, left: 0, bottom: 0 }}
+                        style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
                     >
                         <defs>
                             {/* Gradient for Simulation Line (Green/Red) */}
@@ -384,6 +490,26 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
                         <ReferenceLine y={0} stroke={isDarkMode ? "#475569" : "#cbd5e1"} />
                         <ReferenceLine x={marketData.daxSpot} stroke="#fbbf24" strokeDasharray="3 3" />
                         
+                        {/* BEP Reference Lines */}
+                        {bepData.expiry.map((bep, i) => (
+                            <ReferenceLine 
+                                key={`bep-exp-${i}`} 
+                                x={bep} 
+                                stroke="#3b82f6" 
+                                strokeDasharray="2 2" 
+                                label={{ position: 'top', value: 'BEP Exp', fill: '#3b82f6', fontSize: 8, fontWeight: 'bold' }} 
+                            />
+                        ))}
+                        {structureStatus !== 'Closed' && bepData.sim.map((bep, i) => (
+                            <ReferenceLine 
+                                key={`bep-sim-${i}`} 
+                                x={bep} 
+                                stroke="#10b981" 
+                                strokeDasharray="2 2" 
+                                label={{ position: 'bottom', value: 'BEP Now', fill: '#10b981', fontSize: 8, fontWeight: 'bold' }} 
+                            />
+                        ))}
+
                         <ReferenceDot x={marketData.daxSpot} y={currentValues.exp} r={4} fill="#3b82f6" stroke="#fff" strokeWidth={2} />
                         {structureStatus !== 'Closed' && (
                              <ReferenceDot x={marketData.daxSpot} y={currentValues.sim} r={4} fill={currentValues.sim >= 0 ? "#10b981" : "#ef4444"} stroke="#fff" strokeWidth={2} />
@@ -435,7 +561,7 @@ const PayoffChart: React.FC<PayoffChartProps> = ({
                  </div>
                  
                  <button 
-                    onClick={() => setViewRange(20)}
+                    onClick={handleReset}
                     className="ml-4 text-[10px] font-bold uppercase text-slate-500 hover:text-white hover:bg-slate-500 border border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-1 rounded transition-all"
                  >
                     RESET
