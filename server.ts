@@ -45,9 +45,15 @@ async function startServer() {
   // API Route for New User Notification Webhook
   app.post("/api/notify-signup", async (req, res) => {
     try {
-      // Verify Webhook Secret (optional but recommended)
+      // Verify Webhook Secret
+      if (!process.env.WEBHOOK_SECRET) {
+        console.error("WEBHOOK_SECRET is not configured in environment variables.");
+        return res.status(500).json({ error: "Server configuration error" });
+      }
+
       const secret = req.headers['x-webhook-secret'];
-      if (process.env.WEBHOOK_SECRET && secret !== process.env.WEBHOOK_SECRET) {
+      if (secret !== process.env.WEBHOOK_SECRET) {
+        console.warn("Unauthorized webhook attempt detected.");
         return res.status(401).json({ error: "Unauthorized" });
       }
 
@@ -181,7 +187,7 @@ async function startServer() {
         console.warn("Returning mock data as fallback");
         return res.json({
             daxSpot: 24119.52, // Mock value
-            daxVolatility: 32.26, // Mock value
+            daxVolatility: 15.0, // Default volatility
             lastUpdate: Date.now(),
             isMock: true
         });
@@ -191,14 +197,15 @@ async function startServer() {
       res.json({
         daxSpot,
         daxVolatility,
-        lastUpdate: Date.now()
+        lastUpdate: Date.now(),
+        isMock: false
       });
     } catch (error: any) {
       console.error("Market data fetch error:", error);
       // Even in case of catastrophic error, return mock data to keep UI alive
       res.json({
         daxSpot: 24119.52,
-        daxVolatility: 32.26,
+        daxVolatility: 15.0,
         lastUpdate: Date.now(),
         isMock: true,
         error: error.message || String(error)

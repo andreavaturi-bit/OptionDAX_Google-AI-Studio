@@ -810,7 +810,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             // Short (Qty < 0): Receives money -> Positive Flow
             // Math: -1 * Qty * Price * Multiplier
             const openingFlow = -1 * leg.quantity * leg.tradePrice * localStructure.multiplier;
-            const openingComm = leg.openingCommission || 0;
+            const openingComm = (leg.openingCommission || 0) * Math.abs(leg.quantity);
             
             let legFlow = openingFlow - openingComm;
 
@@ -820,7 +820,7 @@ const StructureDetailView: React.FC<StructureDetailViewProps> = ({ structureId }
             // Math: +1 * Qty * Price * Multiplier
             if (leg.closingPrice !== null && leg.closingPrice !== undefined) {
                 const closingFlow = leg.quantity * leg.closingPrice * localStructure.multiplier;
-                const closingComm = leg.closingCommission || 0;
+                const closingComm = (leg.closingCommission || 0) * Math.abs(leg.quantity);
                 legFlow += (closingFlow - closingComm);
             }
 

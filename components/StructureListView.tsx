@@ -145,14 +145,14 @@ const calculateGlobalPDC = (structure: Structure): number => {
         // Long (Qty > 0): Pays money -> Negative Flow
         // Short (Qty < 0): Receives money -> Positive Flow
         const openingFlow = -1 * leg.quantity * leg.tradePrice * structure.multiplier;
-        const openingComm = leg.openingCommission || 0;
+        const openingComm = (leg.openingCommission || 0) * Math.abs(leg.quantity);
         
         let legFlow = openingFlow - openingComm;
 
         // Closing Flow
         if (leg.closingPrice !== null && leg.closingPrice !== undefined) {
              const closingFlow = leg.quantity * Number(leg.closingPrice) * structure.multiplier;
-             const closingComm = leg.closingCommission || 0;
+             const closingComm = (leg.closingCommission || 0) * Math.abs(leg.quantity);
              legFlow += (closingFlow - closingComm);
         }
 
@@ -416,80 +416,19 @@ const StructureListView: React.FC = () => {
     const displayedStructures = useMemo(() => {
         let baseList = activeTab === 'active' ? activeStructures : closedStructures;
         
-        let sortedList = [...baseList];
-
-        if (sortMethod === 'date') {
-            sortedList.sort((a, b) => {
-                const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                return dateB - dateA; // Newest first
-            });
-        } else if (sortMethod === 'serial') {
-            sortedList.sort((a, b) => {
-                const getSerial = (tag: string) => {
-                    const match = tag.match(/(\d+)$/); // Match last digits
-                    return match ? parseInt(match[1]) : -1;
-                };
-                return getSerial(b.tag) - getSerial(a.tag); // Descending serial
-            });
-        } else if (sortMethod === 'pnl') {
-            sortedList.sort((a, b) => {
-                const pnlA = calculateUnrealizedPnlForStructure(a, marketData);
-                const pnlB = calculateUnrealizedPnlForStructure(b, marketData);
-                return pnlA - pnlB;
-            });
-        } else if (sortMethod === 'custom') {
-            // Custom order
+        if (sortMethod === 'custom') {
             if (customOrder.length === 0) return baseList;
             return [...baseList].sort((a, b) => {
                 const indexA = customOrder.indexOf(a.id);
                 const indexB = customOrder.indexOf(b.id);
-                // If not found in custom order (new items), put them at the top
-                if (indexA === -1) return -1;
-                if (indexB === -1) return 1;
+                if (indexA === -1 && indexB === -1) return 0;
+                if (indexA === -1) return 1;
+                if (indexB === -1) return -1;
                 return indexA - indexB;
             });
         }
 
-        // Apply direction (except for custom sort which is manual)
-        if (sortMethod !== 'custom' && sortDirection === 'desc') {
-            // For serial, desc is default (highest first). If asc, we reverse.
-            // But wait, my logic above for serial is b - a (desc).
-            // If sortDirection is 'asc', I should reverse.
-            // However, the logic `if (sortDirection === 'desc') sortedList.reverse()` assumes the base sort was ASC.
-            // Let's fix the base sorts to be ASC, then reverse if DESC.
-            // Date: dateB - dateA is DESC.
-            // Serial: b - a is DESC.
-            // PnL: A - B is ASC.
-            
-            // Let's standardize base sort to ASC.
-            // Date: A - B
-            // Serial: A - B
-            // PnL: A - B
-            
-            // But I don't want to rewrite the logic above too much.
-            // Let's just handle the reversal correctly.
-            // If current logic is DESC, and I want DESC, do nothing?
-            // No, the previous logic was:
-            // if (sortMethod !== 'custom' && sortDirection === 'desc') sortedList.reverse();
-            // This implies the base sorts were ASC.
-            // Date: dateB - dateA is DESC. So if I reverse, it becomes ASC.
-            // So if sortDirection is 'desc', I should NOT reverse if the base is DESC?
-            // This is confusing. Let's fix the base sorts to be consistent.
-        }
-        
-        // Let's rewrite the sort logic cleanly
-        if (sortMethod === 'custom') {
-             if (customOrder.length === 0) return baseList;
-            return [...baseList].sort((a, b) => {
-                const indexA = customOrder.indexOf(a.id);
-                const indexB = customOrder.indexOf(b.id);
-                if (indexA === -1) return -1;
-                if (indexB === -1) return 1;
-                return indexA - indexB;
-            });
-        }
-
+        const sortedList = [...baseList];
         sortedList.sort((a, b) => {
             let comparison = 0;
             if (sortMethod === 'date') {
@@ -498,16 +437,13 @@ const StructureListView: React.FC = () => {
                 comparison = dateA - dateB;
             } else if (sortMethod === 'serial') {
                 const getSerial = (tag: string) => {
-                    const match = tag.match(/(\d+)$/);
-                    return match ? parseInt(match[1]) : -1;
+                    const digits = tag.replace(/\D/g, '');
+                    return digits ? parseInt(digits, 10) : 0;
                 };
                 comparison = getSerial(a.tag) - getSerial(b.tag);
             } else if (sortMethod === 'pnl') {
-                const pnlA = calculateUnrealizedPnlForStructure(a, marketData);
-                const pnlB = calculateUnrealizedPnlForStructure(b, marketData);
-                comparison = pnlA - pnlB;
+                comparison = calculateUnrealizedPnlForStructure(a, marketData) - calculateUnrealizedPnlForStructure(b, marketData);
             }
-            
             return sortDirection === 'asc' ? comparison : -comparison;
         });
 

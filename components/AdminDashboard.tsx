@@ -63,7 +63,7 @@ const AdminDashboard: React.FC = () => {
                         <p className="text-xs text-slate-500 mt-1">Visibili a tutti gli utenti (default)</p>
                     </div>
                     <div className="divide-y divide-slate-100 dark:divide-gray-700 max-h-[600px] overflow-y-auto">
-                        {structures.sort((a, b) => {
+                        {[...structures].sort((a, b) => {
                             const getNumericValue = (tag: string) => {
                                 if (!tag) return 0;
                                 const digits = tag.replace(/\D/g, '');

@@ -35,7 +35,7 @@ async function fetchDaxPriceViaGemini(): Promise<number | null> {
 /**
  * Recupera sia DAX Spot che VDAX (Volatilità) dal backend.
  */
-export const fetchMarketData = async (): Promise<{ daxSpot: number, daxVolatility: number } | null> => {
+export const fetchMarketData = async (): Promise<{ daxSpot: number, daxVolatility: number, isMock?: boolean } | null> => {
     try {
         // First check if the server is healthy (optional, but helps debugging)
         // const health = await fetch('/api/health').catch(() => null);
@@ -73,7 +73,7 @@ export const fetchMarketData = async (): Promise<{ daxSpot: number, daxVolatilit
             throw new Error("Invalid data received from backend");
         }
 
-        return { daxSpot, daxVolatility };
+        return { daxSpot, daxVolatility, isMock: data.isMock };
     } catch (e: any) {
         console.warn("Failed to fetch market data from backend:", e.message || e);
         
@@ -92,7 +92,8 @@ export const fetchMarketData = async (): Promise<{ daxSpot: number, daxVolatilit
         console.warn("Using client-side mock data as final fallback");
         return { 
             daxSpot: 24119.52, 
-            daxVolatility: 32.26 
+            daxVolatility: 15.0,
+            isMock: true
         };
     }
 };

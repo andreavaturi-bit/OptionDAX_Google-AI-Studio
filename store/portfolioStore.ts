@@ -79,6 +79,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
             openingCommission: l.opening_commission,
             closingCommission: l.closing_commission,
             manualCurrentPrice: l.manual_current_price,
+            enabled: l.enabled !== false,
             notes: l.notes
           }))
         }));
@@ -129,6 +130,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                 openingCommission: l.opening_commission,
                 closingCommission: l.closing_commission,
                 manualCurrentPrice: l.manual_current_price,
+                enabled: l.enabled !== false,
                 notes: l.notes
               }))
             })) as Structure[];
@@ -195,6 +197,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                 opening_commission: leg.opening_commission,
                 closing_commission: leg.closing_commission,
                 manual_current_price: leg.manual_current_price,
+                enabled: leg.enabled !== false,
                 notes: leg.notes
             }));
             
@@ -251,6 +254,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         opening_commission: leg.openingCommission,
         closing_commission: leg.closingCommission,
         manual_current_price: leg.manualCurrentPrice,
+        enabled: leg.enabled !== false,
         notes: leg.notes
       }));
       const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
@@ -297,6 +301,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
         opening_commission: leg.openingCommission,
         closing_commission: leg.closingCommission,
         manual_current_price: leg.manualCurrentPrice,
+        enabled: leg.enabled !== false,
         notes: leg.notes
       }));
       const { error: legsError } = await supabase.from('legs').insert(legsToInsert);
@@ -487,7 +492,7 @@ const usePortfolioStore = create<PortfolioState>((set, get) => ({
                     }, 
                     structures: updatedStructures,
                     isLoadingSpot: false, 
-                    isPriceDelayed: false, 
+                    isPriceDelayed: marketData.isMock === true, 
                     lastUpdate: now 
                 };
             });
